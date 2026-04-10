@@ -32,6 +32,12 @@ FinSight_RAG est un moteur RAG (Retrieval-Augmented Generation) spécialisé dan
   - Stockage des documents bruts
   - Métadonnées associées
 
+### Storage Characteristics
+- **Vector DB** : Qdrant Cloud.
+- **Embeddings** : all-MiniLM-L6-v2 (Or with sentence-transformers library in local).
+- **Dimensionalité** : 384.
+- **Métrique de distance** : Cosine.
+
 ### Infrastructure & Déploiement
 - **Docker** (lightweight image `python:3.12-slim`)
 - **Cibles**: Koyeb ou Render (Free Tier)
