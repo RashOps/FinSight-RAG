@@ -1,0 +1,26 @@
+[project]
+name = "finsight-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.135.3",
+    "llama-index>=0.14.16",
+    "llama-index-embeddings-cohere>=0.8.0",
+    "llama-index-llms-groq>=0.5.0",
+    "llama-index-vector-stores-qdrant>=0.10.0",
+    "logging>=0.4.9.6",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.13.1",
+    "pymongo>=4.16.0",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.44.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
+]
