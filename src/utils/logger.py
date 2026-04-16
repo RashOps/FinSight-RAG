@@ -1,5 +1,6 @@
 import logging
 from logging.handlers import RotatingFileHandler
+from src.config import settings
 
 def get_logger(name: str) -> logging.Logger:
     """
@@ -18,7 +19,7 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.setLevel(logging.DEBUG)
 
-    log_file = "logs/app.log"
+    log_file = settings.logs_dir / "app.log"
 
     formatter = logging.Formatter(
         '[%(asctime)s] %(levelname)-6s | %(name)s | %(filename)s:%(lineno)d | %(message)s',
