@@ -132,10 +132,10 @@ def create_payload(entries, feed, numb_articles=5):
                 "qdrant_chunk_ids": []             
                 } 
             )
-        logger.info("Liste de payload créée avec succès:", len(list_article))
+        logger.info("Liste de payload créée avec succès: %s", len(list_article))
         return list_article 
     except Exception as e:
-        logger.error("Erreur lors de la création du payload: %s")
+        logger.error("Erreur lors de la création du payload: %s: ", e)
         raise Exception(f"Echec de la création du payload: {e}")
 
 def setup_database_indexes():
@@ -167,7 +167,7 @@ def save_news_to_db(news_list: list) -> None:
         collection = db["news-scraped"]
         logger.info("Connexion reussie")
     except Exception as e:
-        logger.error("Erreur lors de la connexion à la DB %s")
+        logger.error("Erreur lors de la connexion à la DB: %s", e)
         raise Exception(f"Erreur de connexion DB: {e}")
 
     operations = []
@@ -179,13 +179,13 @@ def save_news_to_db(news_list: list) -> None:
             news = UpdateOne(filter={"_id": article["_id"]}, update={"$set": article}, upsert=True)
             operations.append(news)
 
-    logger.info("Nombre %s d'opérations détecté.", len(operations))
+    logger.info("Nombre d'opérations détecté: %s", len(operations))
 
     if operations:
         collection.bulk_write(operations)
-        logger.info("Insertion dans la DB réussie: ", len(operations))
+        logger.info("Insertion dans la DB réussie: %s", len(operations))
     else:
-        logger.error("Aucune operation détecté %s")
+        logger.error("Aucune operation détecté")
 
 if __name__ == "__main__":
     for test_url in test_feed:
