@@ -58,7 +58,8 @@ FinSight_RAG est un moteur RAG (Retrieval-Augmented Generation) spécialisé dan
 ```
 FinSight_RAG/
 ├── docs/
-│   └── ADR-001-stack-technique.md       # Décisions architecturales
+│   ├── ADR-001-stack-technique.md       # Décisions architecturales
+│   └── ADR-002-ingestion-strategy.md
 │
 ├── src/
 │   ├── config.py                         # Validation centralisée des env vars
@@ -72,10 +73,13 @@ FinSight_RAG/
 │   │   └── prompts.py                    # Templates strictement guidés
 │   │
 │   ├── ingestion/                        # Pipeline d'ingestion des données
-│   │   └── indexer.py                    # ETL: MongoDB -> Chunking -> Qdrant
+│   │   ├── collector.py                  # Fetch article in mongoDB
+│   │   ├── source.py                     # RSS source Link
+│   │   └── vectorizer.py                 # ETL: MongoDB -> Chunking -> Qdrant
 │   │
 │   └── utils/                            # Utilitaires partagés
 │       ├── db_client.py                  # Client MongoDB
+│       ├── date_parser.py                # Parsing des dates des articles
 │       └── logger.py                     # Logger centralisé (RotatingFileHandler)
 │
 ├── tests/
