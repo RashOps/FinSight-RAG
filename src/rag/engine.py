@@ -4,6 +4,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import VectorStoreIndex, Settings
 from llama_index.vector_stores.qdrant import QdrantVectorStore
 from src.utils.logger import get_logger
+from src.rag.prompts import QA_PROMPT
 from src.config import settings
 
 logger = get_logger(__name__)
@@ -63,11 +64,22 @@ def get_query_engine():
     )
 
     engine = index.as_query_engine(
-        similarity_top_k=5)
+        similarity_top_k=5,
+        text_qa_template=QA_PROMPT
+    )
 
     return engine
 
 if __name__ == "__main__":
     rag_engine = get_query_engine()
+
+    print("Génération de la réponse en cours...")
     response = rag_engine.query("What is the latest news ?")
     print(response)
+
+    print("Génération de la réponse en cours...")
+    response = rag_engine.query("Quelles sont les dernières nouvelles concernant Live Nation et quelles en sont les conséquences ?")
+    
+    print("\n" + "="*50)
+    print(response)
+    print("="*50)
