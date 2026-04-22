@@ -27,7 +27,7 @@ def get_article(numb_articles:int = 5) -> list:
         for article in result:
             all_articles.append(article)
 
-        logger.info("Chargement des articles effectué: %s", len(all_articles), " articles chargés.")
+        logger.info("Chargement des articles effectué: %s", len(all_articles))
         return all_articles
     
     except Exception as e:
@@ -44,7 +44,7 @@ def convert_to_doc(data: list):
     try:
         for article in data:
             doc = Document(
-                content = article["content"],
+                text = article["content"],
                 metadata={
                     "_id": article["_id"],
                     "published": article["published_at"],
