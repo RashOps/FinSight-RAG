@@ -27,17 +27,17 @@ jobs:
 
       - name: Install dependencies with uv
         run: |
-          uv sync
+          uv sync --frozen
 
       - name: Run data collector
         env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_URI: ${{ secrets.MONGO_URI }}
         run: |
           uv run python -m src.ingestion.collector
 
       - name: Run vectorizer
         env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_URI: ${{ secrets.MONGO_URI }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
         run: |
