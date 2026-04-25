@@ -11,6 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
+    env:
+      mongo_uri: ${{ secrets.MONGO_URI }}
+      qdrant_url: ${{ secrets.QDRANT_URL }}
+      qdrant_api_key: ${{ secrets.QDRANT_API_KEY }}
+      groq_api_key: ${{ secrets.GROQ_API_KEY }}
+      cohere_api_key: ${{ secrets.COHERE_API_KEY }}
+      mongo_db_name: "finsight-db"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,19 +41,10 @@ jobs:
         run: mkdir -p logs
 
       - name: Run data collector
-        env:
-          MONGO_URI: ${{ secrets.MONGO_URI }}
         run: |
           uv run python -m src.ingestion.collector
 
       - name: Run vectorizer
-        env:
-          MONGO_URI: ${{ secrets.MONGO_URI }}
-          MONGO_DB_NAME: "finsight-news"
-          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
-          QDRANT_URL: ${{ secrets.QDRANT_URL }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
         run: |
           uv run python -m src.ingestion.vectorizer
 
