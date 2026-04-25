@@ -44,6 +44,3 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
-
-# Ensure directory exist - Move to main.py
-# settings.logs_dir.mkdir(parents=True, exist_ok=True)
