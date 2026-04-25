@@ -1,0 +1,52 @@
+name: Data Ingestion Pipeline
+
+on:
+  schedule:
+    # Lance toutes les 6 heures (à 0h, 6h, 12h, 18h UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  ingest-and-vectorize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v2
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies with uv
+        run: |
+          uv sync
+
+      - name: Run data collector
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+        run: |
+          uv run python -m src.ingestion.collector
+
+      - name: Run vectorizer
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+        run: |
+          uv run python -m src.ingestion.vectorizer
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ingestion-logs
+          path: logs/app.log
+
