@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import ValidationError
 from contextlib import asynccontextmanager
 from typing import List
@@ -83,6 +84,11 @@ async def log_requests(request: Request, call_next):
             process_time
         )
         raise
+
+@app.get("/", include_in_schema=False)
+async def root():
+    """Redirige automatiquement vers la documentation Swagger"""
+    return RedirectResponse(url="/docs")
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
