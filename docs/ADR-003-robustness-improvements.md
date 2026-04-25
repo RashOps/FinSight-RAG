@@ -192,6 +192,3 @@ Suite à l'implémentation initiale du système FinSight RAG (ADR-001 et ADR-002
 * **Probabilité** : Élevée
 * **Impact** : Moyen
 * **Mitigation** : Retry logic, fallbacks, circuit breakers
-
-Cette ADR transforme FinSight RAG d'un prototype fonctionnel en un système de production robuste, sécurisé et maintenable.</content>
-<parameter name="filePath">c:\Users\Rayhan\Documents\Dev_Pro_Perso\Projets\FinSight_RAG\docs\ADR-003-robustness-improvements.md
