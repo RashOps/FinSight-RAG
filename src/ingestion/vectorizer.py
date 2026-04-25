@@ -43,12 +43,18 @@ def convert_to_doc(data: list):
     all_doc = []
     try:
         for article in data:
+            text_to_embed = article.get("content") or article.get("summary")
+            if not text_to_embed or len(text_to_embed.strip()) < 10:
+                logger.warning("Document ignoré car texte trop court ou vide : %s", article.get("_id"))
+                continue
+            
             doc = Document(
-                text = article["content"],
+                text = text_to_embed,
                 metadata={
                     "_id": article["_id"],
                     "published": article["published_at"],
-                    "source": article["source"]
+                    "source": article["source"],
+                    "url": article["url"]
                     }           
                 )
             all_doc.append(doc)

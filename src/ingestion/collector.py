@@ -56,7 +56,7 @@ def parse_news(link: str):
 
 def fetch_text(article_link: str):
     """Get article text via Trafilatura"""
-    logger.error("Chargement du contenu de chaque article")
+    logger.debug("Chargement du contenu de chaque article")
     try:
         html = fetch_url(article_link)
         result = extract(
@@ -116,14 +116,21 @@ def create_payload(entries, feed, numb_articles=5):
 
     try: 
         for info in entries[:numb_articles]:
+            content = fetch_text(info.link)
+            summary = get_description(info)
+
+            if not content and not summary:
+                logger.warning(f"Article ignoré (vide) : {info.title}")
+                continue
+           
             list_article.append(
                 {
                 "_id": generate_hash(info.link),            
                 "source": feed.title,
                 "title": info.title,
                 "title_hash": generate_hash(info.title), 
-                "summary": get_description(info),             
-                "content": fetch_text(info.link),        
+                "summary": summary,             
+                "content": content,        
                 "url": info.link,
                 "published_at": standardize_date(get_date(info)), 
                 "language": feed.get("language", "en"),       
