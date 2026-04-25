@@ -9,7 +9,6 @@ on:
 jobs:
   ingest-and-vectorize:
     runs-on: ubuntu-latest
-    environment: Data Ingestion Pipeline
     timeout-minutes: 25
 
     steps:
