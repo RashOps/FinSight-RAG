@@ -44,8 +44,7 @@ FinSight RAG est un moteur de génération assistée par récupération (RAG) co
 
 ## 🚀 Déploiement
 
-<!-- TODO: Ajouter le lien de déploiement une fois disponible -->
-<!-- [🌐 Application déployée](https://your-deployment-url.com) -->
+[🌐 Application déployée](https://huggingface.co/spaces/RashOps/finsight-rag)
 
 ## 📋 Prérequis
 
@@ -60,9 +59,9 @@ FinSight RAG est un moteur de génération assistée par récupération (RAG) co
 - **Qdrant Cloud** >= 0.10.0 (base de données vectorielle)
   - Cluster dédié pour les embeddings
 - **Cohere API** (embeddings multilingues)
-  - Modèle `embed-multilingual-v3.0`
+  - Modèle `embed-multilingual-light-v3.0`
 - **Groq API** (LLM ultra-rapide)
-  - Modèle Llama-3 via LPU
+  - Modèle Llama-3.3-70B-Instruct
 
 ### APIs Freemium
 - **NewsAPI** (optionnel, enrichissement des données)
