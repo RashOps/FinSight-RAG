@@ -28,6 +28,7 @@ RUN groupadd --gid 1000 appuser && \
 # Dependances nécessaires
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Création du répertoire de travail

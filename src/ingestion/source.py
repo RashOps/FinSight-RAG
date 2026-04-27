@@ -1,7 +1,7 @@
 RSS_FEEDS = {
 
     # ═══════════════════════════════════
-    # SOURCES FIABLES & TESTÉES (9/16)
+    # SOURCES FIABLES & TESTÉES
     # ═══════════════════════════════════
 
     # MarketWatch (Dow Jones)
@@ -22,20 +22,20 @@ RSS_FEEDS = {
     "fed_press":             "https://www.federalreserve.gov/feeds/press_all.xml",
 
     # ═══════════════════════════════════
-    # SOURCES PROBLÉMATIQUES (7/16)
+    # SOURCES RÉACTIVÉES (StealthHttpClient)
     # ═══════════════════════════════════
 
-    # CNBC - HTTP 403 (bloque les bots)
-    # "cnbc_top":          "https://www.cnbc.com/id/100003114/device/rss/rss.html",
-    # "cnbc_world":        "https://www.cnbc.com/id/100727362/device/rss/rss.html",
-    # "cnbc_finance":      "https://www.cnbc.com/id/10000664/device/rss/rss.html",
-    # "cnbc_earnings":     "https://www.cnbc.com/id/15839135/device/rss/rss.html",
+    # CNBC — Réactivé via TLS impersonation
+    "cnbc_top":              "https://www.cnbc.com/id/100003114/device/rss/rss.html",
+    "cnbc_world":            "https://www.cnbc.com/id/100727362/device/rss/rss.html",
+    "cnbc_finance":          "https://www.cnbc.com/id/10000664/device/rss/rss.html",
+    "cnbc_earnings":         "https://www.cnbc.com/id/15839135/device/rss/rss.html",
 
-    # Yahoo Finance - HTTP 429 (rate limiting)
-    # "yahoo_finance":     "https://finance.yahoo.com/news/rssindex",
-    # "yahoo_top_stories": "https://finance.yahoo.com/rss/topstories",
+    # Yahoo Finance — Réactivé via TLS impersonation + rate limiting intégré
+    "yahoo_finance":         "https://finance.yahoo.com/news/rssindex",
+    "yahoo_top_stories":     "https://finance.yahoo.com/rss/topstories",
 
-    # SEC - HTTP 403 (bloque les bots)
-    # "sec_press":         "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&dateb=&owner=include&count=40&search_text=&output=atom",
+    # SEC — Réactivé via TLS impersonation
+    "sec_press":             "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&dateb=&owner=include&count=40&search_text=&output=atom",
 
 }

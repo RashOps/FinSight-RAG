@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "curl-cffi>=0.9.0",
+    "fake-useragent>=2.0.3",
     "fastapi>=0.135.3",
     "feedparser>=6.0.12",
     "llama-index>=0.14.16",
@@ -26,6 +28,7 @@ dependencies = [
 dev = [
     "httpx>=0.28.1",
     "pytest>=9.0.3",
+    "pytest-asyncio>=0.23.5",
     "pytest-cov>=7.1.0",
 ]
 

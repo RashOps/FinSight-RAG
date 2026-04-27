@@ -2,7 +2,8 @@
 Unit tests for FinSight RAG components.
 """
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+import asyncio
+from unittest.mock import Mock, patch, MagicMock, AsyncMock
 from datetime import datetime, timezone
 import sys
 import os
@@ -168,29 +169,22 @@ class TestCollector:
         }
         assert validate_article_data(invalid_article) == False
 
-    @patch('src.ingestion.collector.httpx.Client')
-    def test_fetch_link_success(self, mock_client):
-        """Test successful RSS feed fetching"""
-        mock_response = Mock()
-        mock_response.text = "<rss><channel><title>Test Feed</title></channel></rss>"
-        mock_response.raise_for_status.return_value = None
+    @pytest.mark.asyncio
+    async def test_fetch_link_success(self):
+        """Test successful RSS feed fetching via StealthHttpClient"""
+        mock_client = AsyncMock()
+        mock_client.get_text.return_value = "<rss><channel><title>Test Feed</title></channel></rss>"
 
-        mock_client.return_value.__enter__.return_value.get.return_value = mock_response
+        result = await fetch_link(mock_client, "https://example.com/rss")
+        assert result == "<rss><channel><title>Test Feed</title></channel></rss>"
+        mock_client.get_text.assert_awaited_once_with("https://example.com/rss")
 
-        result = fetch_link("https://example.com/rss")
-        assert result == mock_response.text
-
-    @patch('src.ingestion.collector.httpx.Client')
-    def test_fetch_link_retry_on_failure(self, mock_client):
-        """Test RSS feed fetching with retry on failure"""
-        mock_client.return_value.__enter__.return_value.get.side_effect = [
-            Exception("Network error"),
-            Exception("Network error"),
-            Mock(text="<rss>content</rss>", raise_for_status=lambda: None)
-        ]
-
-        result = fetch_link("https://example.com/rss", max_retries=3)
-        assert result == "<rss>content</rss>"
+    @pytest.mark.asyncio
+    async def test_fetch_link_invalid_url(self):
+        """Test fetch_link rejects invalid URL"""
+        mock_client = AsyncMock()
+        with pytest.raises(ValueError):
+            await fetch_link(mock_client, "not-a-url")
 
 class TestDateParser:
     """Test date parsing functionality"""

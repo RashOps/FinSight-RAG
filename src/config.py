@@ -99,6 +99,44 @@ class Settings(BaseSettings):
         le=300
     )
 
+    # HTTP Stealth settings
+    http_max_retries: int = Field(
+        default=3,
+        description="Maximum retry attempts per request",
+        ge=1,
+        le=10
+    )
+    http_min_delay: float = Field(
+        default=1.0,
+        description="Minimum delay between requests (seconds)",
+        ge=0.5,
+        le=10.0
+    )
+    http_max_delay: float = Field(
+        default=5.0,
+        description="Maximum delay between requests (seconds)",
+        ge=1.0,
+        le=30.0
+    )
+    http_impersonate: str = Field(
+        default="chrome",
+        description="Browser to impersonate for TLS fingerprinting"
+    )
+
+    # Scrape.do API Integration
+    scrape_do_api_key: str = Field(
+        default="",
+        description="Scrape.do API token for proxy fallback"
+    )
+
+    # DLQ Settings
+    dlq_max_retries: int = Field(
+        default=3,
+        description="Maximum number of retries for articles in the DLQ",
+        ge=1,
+        le=10
+    )
+
     @field_validator('mongo_uri')
     @classmethod
     def validate_mongo_uri(cls, v: str) -> str:
