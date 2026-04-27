@@ -1,0 +1,43 @@
+name: Keep Alive Hugging Face Space
+
+on:
+  schedule:
+    # Lance une requête tous les jours à midi (UTC) pour empêcher l'espace de s'endormir
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping-hf-space:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Ping Health Endpoint
+        # Utilisation de curl pour envoyer une requête GET simple
+        # Remplacez l'URL ci-dessous par l'URL réelle de votre espace Hugging Face
+        # (ex: https://votre-pseudo-finsight-rag.hf.space/health)
+        run: |
+          # Vous pouvez aussi utiliser une variable secrète Github: ${{ secrets.HF_SPACE_URL }}
+          URL="${{ secrets.HF_SPACE_URL }}"
+          
+          if [ -z "$URL" ]; then
+            echo "::error::La variable secrète HF_SPACE_URL n'est pas définie."
+            echo "Veuillez ajouter votre URL Hugging Face dans les secrets GitHub ou la coder en dur dans ce fichier."
+            exit 1
+          fi
+          
+          echo "Pinging $URL ..."
+          
+          # curl silencieux, suit les redirections, s'arrête après 10s
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -L --max-time 10 "$URL")
+          
+          echo "Status Code: $HTTP_STATUS"
+          
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 301 ] || [ "$HTTP_STATUS" -eq 302 ]; then
+            echo "Ping réussi, le service est éveillé."
+            exit 0
+          else
+            echo "::warning::Le ping a retourné un statut inattendu ($HTTP_STATUS). Le service met peut-être du temps à se réveiller."
+            # On ne fait pas échouer le script car le but est juste de l'éveiller
+            exit 0
+          fi

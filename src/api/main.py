@@ -14,7 +14,11 @@ from src.config import settings
 from src.utils.db_client import get_db
 from src.utils.logger import get_logger
 from src.rag.engine import get_query_engine
-from src.ingestion.collector import fetch_link, parse_news, create_payload, save_news_to_db
+from src.ingestion.collector import (
+    fetch_link, parse_news, create_payload, save_news_to_db,
+    run_ingestion_pipeline, process_dlq
+)
+from src.utils.http_client import StealthHttpClient
 from src.ingestion.vectorizer import get_article, convert_to_doc, vectorize_articles
 from src.ingestion.source import RSS_FEEDS
 
@@ -336,20 +340,21 @@ async def general_exception_handler(request, exc):
 
 # Utility functions for background tasks
 async def fetch_articles(num_articles: int = 3):
-    """Load new articles from RSS feeds"""
+    """Load new articles from RSS feeds using stealth HTTP client."""
     try:
-        for feed_name in RSS_FEEDS:
-            logger.info("Fetching articles from %s", feed_name)
-            url = fetch_link(RSS_FEEDS[feed_name])
-            entries, feed_info = parse_news(url)
-            news = create_payload(entries, feed_info, num_articles)
-            if news:
-                save_news_to_db(news)
-                logger.info("Saved %d articles from %s", len(news), feed_name)
+        async with StealthHttpClient() as client:
+            for feed_name, feed_url in RSS_FEEDS.items():
+                logger.info("Fetching articles from %s", feed_name)
+                rss_content = await fetch_link(client, feed_url)
+                entries, feed_info = parse_news(rss_content)
+                news = await create_payload(client, entries, feed_info, num_articles)
+                if news:
+                    save_news_to_db(news)
+                    logger.info("Saved %d articles from %s", len(news), feed_name)
         logger.info("Article fetching completed successfully")
     except Exception as e:
         logger.error("Failed to fetch new articles: %s", e)
-        raise Exception(f"Failed to fetch new articles: {e}")
+        raise RuntimeError(f"Failed to fetch new articles: {e}") from e
 
 async def run_vectorization(limit: int = 10):
     """Run vectorization pipeline for non-vectorized articles"""
@@ -360,7 +365,19 @@ async def run_vectorization(limit: int = 10):
         return result
     except Exception as e:
         logger.error("Vectorization failed: %s", e)
-        raise Exception(f"Vectorization failed: {e}")
+        raise RuntimeError(f"Vectorization failed: {e}") from e
+
+async def run_dlq_processing():
+    """Run DLQ processing for failed articles"""
+    try:
+        logger.info("Starting DLQ background processing")
+        async with StealthHttpClient() as client:
+            result = await process_dlq(client)
+        logger.info("DLQ processing completed: %s", result)
+        return result
+    except Exception as e:
+        logger.error("DLQ processing failed: %s", e)
+        raise RuntimeError(f"DLQ processing failed: {e}") from e
 
 # Background task endpoints
 @app.post("/fetch-articles", tags=["Ingestion"])
@@ -397,4 +414,19 @@ async def run_article_vectorizer(background_tasks: BackgroundTasks, limit: int =
     return {
         "status": "processing",
         "message": f"Vectorizing up to {limit} articles per batch in background"
+    }
+
+@app.post("/dlq/retry", tags=["Ingestion"])
+async def retry_dlq_articles(background_tasks: BackgroundTasks):
+    """
+    Launch background processing of the Dead Letter Queue (DLQ).
+    
+    Attempts to fetch and parse articles that previously failed.
+    """
+    background_tasks.add_task(run_dlq_processing)
+    logger.info("Started background DLQ processing")
+
+    return {
+        "status": "processing",
+        "message": "Processing Dead Letter Queue in background"
     }

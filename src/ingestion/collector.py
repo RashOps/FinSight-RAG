@@ -1,113 +1,79 @@
-import time
-import random
+"""Financial news collector with stealth HTTP and async pipeline.
+
+Collects articles from RSS feeds using TLS-impersonated HTTP requests,
+extracts full-text content via Trafilatura, and persists to MongoDB.
+"""
+
+import asyncio
 import hashlib
-import httpx
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
+
 import feedparser
 import pymongo
 from pymongo import UpdateOne
-from datetime import datetime, timezone
-from typing import List, Dict, Optional, Tuple, Any
-from urllib.parse import urlparse
+from trafilatura import extract
+
+from src.config import settings
 from src.ingestion.source import RSS_FEEDS
 from src.utils.date_parser import standardize_date
-from trafilatura import extract
-from src.utils.logger import get_logger
 from src.utils.db_client import get_db
-from src.config import settings
-
-# Test RSS Link
-test_feed = {
-    # "yahoo": RSS_FEEDS["yahoo_top_stories"],
-    "investing": RSS_FEEDS["investing_com"]
-}
-
-# Header for scraping with enhanced browser simulation
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/rss+xml, application/xml, text/xml, */*",
-    "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
-    "DNT": "1",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-}
+from src.utils.http_client import StealthHttpClient
+from src.utils.logger import get_logger
 
 # Logger
 logger = get_logger(__name__)
 
-def fetch_link(url: str, max_retries: int = 3) -> str:
-    """
-    Fetch RSS feed content with retry logic and enhanced error handling.
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# RSS Fetching & Parsing
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+async def fetch_link(
+    client: StealthHttpClient, url: str
+) -> str:
+    """Fetch RSS feed content using stealth HTTP client.
 
     Args:
-        url: RSS feed URL to fetch
-        max_retries: Maximum number of retry attempts
+        client: Initialised StealthHttpClient instance.
+        url: RSS feed URL to fetch.
 
     Returns:
-        str: Raw RSS feed content
+        Raw RSS feed content as string.
 
     Raises:
-        Exception: If all retry attempts fail
+        RuntimeError: If all HTTP strategies fail.
     """
     if not url or not isinstance(url, str):
         raise ValueError("URL must be a non-empty string")
 
-    try:
-        parsed_url = urlparse(url)
-        if not parsed_url.scheme or not parsed_url.netloc:
-            raise ValueError(f"Invalid URL format: {url}")
-    except Exception as e:
-        raise ValueError(f"URL validation failed: {e}")
+    parsed_url = urlparse(url)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        raise ValueError(f"Invalid URL format: {url}")
 
     logger.debug("Fetching RSS feed from: %s", url)
+    content = await client.get_text(url)
 
-    for attempt in range(max_retries):
-        try:
-            with httpx.Client(
-                timeout=settings.request_timeout,
-                headers=DEFAULT_HEADERS,
-                follow_redirects=True
-            ) as client:
-                response = client.get(url)
-                response.raise_for_status()
+    if not content.strip():
+        raise ValueError("Empty response content")
 
-                content = response.text
-                if not content.strip():
-                    raise ValueError("Empty response content")
+    logger.info("RSS feed fetched successfully from %s", url)
+    return content
 
-                logger.info("RSS feed fetched successfully from %s", url)
-                time.sleep(random.uniform(0.5, 2.5))  # Rate limiting
-                return content
-
-        except httpx.TimeoutException as e:
-            logger.warning("Timeout fetching %s (attempt %d/%d): %s", url, attempt + 1, max_retries, e)
-        except httpx.HTTPStatusError as e:
-            logger.warning("HTTP error fetching %s (attempt %d/%d): %s", url, attempt + 1, max_retries, e)
-        except Exception as e:
-            logger.warning("Error fetching %s (attempt %d/%d): %s", url, attempt + 1, max_retries, e)
-
-        if attempt < max_retries - 1:
-            wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff
-            logger.info("Waiting %.2f seconds before retry...", wait_time)
-            time.sleep(wait_time)
-
-    raise Exception(f"Failed to fetch RSS feed after {max_retries} attempts: {url}")
 
 def parse_news(link: str) -> Tuple[List[Any], Dict[str, Any]]:
-    """
-    Parse RSS feed content and extract entries and feed metadata.
+    """Parse RSS feed content and extract entries and feed metadata.
 
     Args:
-        link: Raw RSS feed content
+        link: Raw RSS feed content.
 
     Returns:
-        Tuple of (entries list, feed metadata dict)
+        Tuple of (entries list, feed metadata dict).
 
     Raises:
-        Exception: If parsing fails
+        ValueError: If parsing fails or feed is empty.
     """
     if not link or not isinstance(link, str):
         raise ValueError("RSS content must be a non-empty string")
@@ -134,18 +100,25 @@ def parse_news(link: str) -> Tuple[List[Any], Dict[str, Any]]:
 
     except Exception as e:
         logger.error("Failed to parse RSS feed: %s", e)
-        raise Exception(f"RSS parsing failed: {e}")
+        raise ValueError(f"RSS parsing failed: {e}") from e
 
-def fetch_article_text(article_url: str, max_retries: int = 2) -> Optional[str]:
-    """
-    Extract article text content using Trafilatura with retry logic.
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Article Content Extraction
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+async def fetch_article_text(
+    client: StealthHttpClient, article_url: str
+) -> Optional[str]:
+    """Extract article text content using Trafilatura.
 
     Args:
-        article_url: URL of the article to extract
-        max_retries: Maximum number of retry attempts
+        client: Initialised StealthHttpClient instance.
+        article_url: URL of the article to extract.
 
     Returns:
-        Optional[str]: Extracted text content, or None if extraction fails
+        Extracted text content, or None if extraction fails.
     """
     if not article_url or not isinstance(article_url, str):
         logger.warning("Invalid article URL provided")
@@ -153,60 +126,56 @@ def fetch_article_text(article_url: str, max_retries: int = 2) -> Optional[str]:
 
     logger.debug("Extracting content from article: %s", article_url)
 
-    for attempt in range(max_retries):
-        try:
-            # Fetch HTML content using httpx with proper headers
-            with httpx.Client(
-                timeout=settings.request_timeout,
-                headers=DEFAULT_HEADERS,
-                follow_redirects=True
-            ) as client:
-                response = client.get(article_url)
-                response.raise_for_status()
-                html = response.text
+    try:
+        html = await client.get_text(article_url)
 
-            if not html:
-                logger.warning("No HTML content fetched from %s", article_url)
-                return None
+        if not html:
+            logger.warning("No HTML content fetched from %s", article_url)
+            return None
 
-            # Extract text
-            result = extract(
-                filecontent=html,
-                output_format="txt",
-                include_comments=False,
-                include_tables=True,
-                include_links=False,  # Exclude links for cleaner text
-                include_images=False,
-                with_metadata=False
+        # Extract text via Trafilatura (CPU-bound, run in thread pool)
+        result = await asyncio.to_thread(
+            extract,
+            filecontent=html,
+            output_format="txt",
+            include_comments=False,
+            include_tables=True,
+            include_links=False,
+            include_images=False,
+            with_metadata=False,
+        )
+
+        if result and len(result.strip()) > 50:  # Minimum content length
+            logger.debug(
+                "Successfully extracted %d characters from %s",
+                len(result), article_url,
             )
+            return result.strip()
 
-            if result and len(result.strip()) > 50:  # Minimum content length
-                logger.debug("Successfully extracted %d characters from %s", len(result), article_url)
-                time.sleep(random.uniform(0.5, 2.0))  # Rate limiting
-                return result.strip()
-            else:
-                logger.warning("Extracted content too short or empty from %s", article_url)
-                return None
+        logger.warning("Extracted content too short or empty from %s", article_url)
+        return None
 
-        except Exception as e:
-            logger.warning("Failed to extract content from %s (attempt %d/%d): %s",
-                         article_url, attempt + 1, max_retries, e)
+    except RuntimeError as e:
+        logger.warning("HTTP strategies exhausted for %s: %s", article_url, e)
+        return None
+    except Exception as e:
+        logger.warning("Failed to extract content from %s: %s", article_url, e)
+        return None
 
-        if attempt < max_retries - 1:
-            time.sleep(random.uniform(1, 3))  # Wait before retry
 
-    logger.error("Failed to extract content from %s after %d attempts", article_url, max_retries)
-    return None
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Hashing & Validation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 
 def generate_content_hash(text: str) -> str:
-    """
-    Generate SHA256 hash for content deduplication.
+    """Generate SHA256 hash for content deduplication.
 
     Args:
-        text: Text content to hash
+        text: Text content to hash.
 
     Returns:
-        str: SHA256 hash of the normalized content
+        SHA256 hash of the normalised content.
     """
     if not text or not isinstance(text, str):
         raise ValueError("Text must be a non-empty string")
@@ -224,23 +193,23 @@ def generate_content_hash(text: str) -> str:
 
     except Exception as e:
         logger.error("Failed to generate content hash: %s", e)
-        raise Exception(f"Hash generation failed: {e}")
+        raise RuntimeError(f"Hash generation failed: {e}") from e
+
 
 def validate_article_data(article: Dict[str, Any]) -> bool:
-    """
-    Validate article data before database insertion.
+    """Validate article data before database insertion.
 
     Args:
-        article: Article data dictionary
+        article: Article data dictionary.
 
     Returns:
-        bool: True if valid, False otherwise
+        True if valid, False otherwise.
     """
     required_fields = ['_id', 'title', 'url', 'source', 'published_at']
 
-    for field in required_fields:
-        if not article.get(field):
-            logger.warning("Article missing required field: %s", field)
+    for field_name in required_fields:
+        if not article.get(field_name):
+            logger.warning("Article missing required field: %s", field_name)
             return False
 
     # Validate URL format
@@ -263,9 +232,59 @@ def validate_article_data(article: Dict[str, Any]) -> bool:
 
     return True
 
-def create_payload(entries, feed, numb_articles=5):
-    """
-    Create article payload for database with enhanced validation and error handling.
+
+def save_to_dlq(article_url: str, title: str, source: str, error_reason: str) -> None:
+    """Save a failed article to the Dead Letter Queue for later retry."""
+    try:
+        db = get_db()
+        dlq_collection = db["news-dlq"]
+        article_id = generate_content_hash(article_url)
+        
+        now = datetime.now(timezone.utc)
+        
+        dlq_collection.update_one(
+            {"_id": article_id},
+            {
+                "$set": {
+                    "url": article_url,
+                    "title": title,
+                    "source": source,
+                    "error_reason": error_reason,
+                    "last_attempt_at": now,
+                },
+                "$setOnInsert": {
+                    "first_failed_at": now,
+                    "status": "pending",
+                },
+                "$inc": {"retry_count": 1}
+            },
+            upsert=True
+        )
+        logger.debug("Saved to DLQ: %s", title)
+    except Exception as e:
+        logger.error("Failed to save article to DLQ: %s", e)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Payload Creation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+async def create_payload(
+    client: StealthHttpClient,
+    entries: List[Any],
+    feed: Dict[str, Any],
+    numb_articles: int = 5,
+) -> List[Dict[str, Any]]:
+    """Create article payloads for database with async content fetching.
+
+    Args:
+        client: Initialised StealthHttpClient instance.
+        entries: RSS feed entries.
+        feed: Feed metadata dictionary.
+        numb_articles: Maximum number of articles to process.
+
+    Returns:
+        List of validated article payload dicts.
     """
     if not entries:
         logger.warning("No entries provided to create_payload")
@@ -276,7 +295,7 @@ def create_payload(entries, feed, numb_articles=5):
 
     logger.debug("Creating payloads for %d articles", min(len(entries), numb_articles))
 
-    articles_payload = []
+    articles_payload: List[Dict[str, Any]] = []
     processed_count = 0
     error_count = 0
 
@@ -296,10 +315,12 @@ def create_payload(entries, feed, numb_articles=5):
                 error_count += 1
                 continue
 
-            # Extract content
-            content = fetch_article_text(article_url)
+            # Extract content (async)
+            content = await fetch_article_text(client, article_url)
             if not content:
                 logger.warning("Failed to extract content for article: %s", title)
+                source_name = feed.get('title', 'Unknown Source')
+                save_to_dlq(article_url, title, source_name, "Extraction returned empty content or failed")
                 error_count += 1
                 continue
 
@@ -327,13 +348,13 @@ def create_payload(entries, feed, numb_articles=5):
             article_id = generate_content_hash(article_url)
 
             # Extract language
-            language = getattr(feed, 'language', 'en') or 'en'
+            language = feed.get('language', 'en') or 'en'
 
             # Extract source name
-            source_name = getattr(feed, 'title', 'Unknown Source')
+            source_name = feed.get('title', 'Unknown Source')
 
             # Create article payload
-            article_payload = {
+            article_payload: Dict[str, Any] = {
                 "_id": article_id,
                 "source": source_name,
                 "title": title,
@@ -347,7 +368,7 @@ def create_payload(entries, feed, numb_articles=5):
                 "vectorized_at": None,
                 "qdrant_chunk_ids": [],
                 "content_length": len(content),
-                "summary_length": len(summary)
+                "summary_length": len(summary),
             }
 
             # Validate article data
@@ -364,13 +385,20 @@ def create_payload(entries, feed, numb_articles=5):
             logger.error("Failed to process article entry: %s", e)
             continue
 
-    logger.info("Payload creation completed: %d successful, %d errors", processed_count, error_count)
+    logger.info(
+        "Payload creation completed: %d successful, %d errors",
+        processed_count, error_count,
+    )
     return articles_payload
 
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Database Operations
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
 def setup_database_indexes() -> None:
-    """
-    Create optimized database indexes for the news collection.
-    """
+    """Create optimised database indexes for the news collection."""
     logger.debug("Setting up database indexes")
 
     try:
@@ -419,21 +447,31 @@ def setup_database_indexes() -> None:
         except pymongo.errors.OperationFailure:
             logger.warning("Text index creation failed (may already exist or not supported)")
 
+        # Indexes for DLQ collection
+        dlq_collection = db["news-dlq"]
+        dlq_collection.create_index([("status", pymongo.ASCENDING)])
+        dlq_collection.create_index([("retry_count", pymongo.ASCENDING)])
+        dlq_collection.create_index(
+            [("last_attempt_at", pymongo.DESCENDING)],
+            expireAfterSeconds=7 * 24 * 60 * 60,  # 7 days TTL for DLQ
+            name="ttl_dlq_last_attempt"
+        )
+
         logger.info("Database indexes setup completed")
 
     except Exception as e:
         logger.error("Failed to setup database indexes: %s", e)
         raise
 
+
 def save_news_to_db(news_list: List[Dict[str, Any]]) -> Dict[str, int]:
-    """
-    Save news articles to database with bulk operations and error handling.
+    """Save news articles to database with bulk operations and error handling.
 
     Args:
-        news_list: List of article payloads to save
+        news_list: List of article payloads to save.
 
     Returns:
-        Dict with operation statistics
+        Dict with operation statistics.
     """
     if not news_list:
         logger.warning("No articles provided to save")
@@ -448,10 +486,10 @@ def save_news_to_db(news_list: List[Dict[str, Any]]) -> Dict[str, int]:
 
     except Exception as e:
         logger.error("Database connection failed: %s", e)
-        raise Exception(f"Database connection error: {e}")
+        raise RuntimeError(f"Database connection error: {e}") from e
 
-    operations = []
-    stats = {"inserted": 0, "updated": 0, "errors": 0}
+    operations: list[UpdateOne] = []
+    stats: Dict[str, int] = {"inserted": 0, "updated": 0, "errors": 0}
     ingested_at = datetime.now(timezone.utc)
 
     for article in news_list:
@@ -497,30 +535,138 @@ def save_news_to_db(news_list: List[Dict[str, Any]]) -> Dict[str, int]:
     except Exception as e:
         logger.error("Bulk write operation failed: %s", e)
         stats["errors"] += len(operations)
-        raise Exception(f"Database bulk write failed: {e}")
+        raise RuntimeError(f"Database bulk write failed: {e}") from e
 
-def collect_articles_from_feed(feed_url: str, max_articles: int = 5) -> Dict[str, Any]:
-    """
-    Complete pipeline to collect articles from a single RSS feed.
+async def process_dlq(client: StealthHttpClient) -> Dict[str, int]:
+    """Process pending articles in the Dead Letter Queue.
 
     Args:
-        feed_url: RSS feed URL
-        max_articles: Maximum articles to collect
+        client: Initialised StealthHttpClient instance.
 
     Returns:
-        Dict with collection statistics
+        Dict with DLQ processing statistics.
+    """
+    logger.info("Starting DLQ processing")
+    stats = {"processed": 0, "recovered": 0, "failed_permanently": 0, "errors": 0}
+    
+    try:
+        db = get_db()
+        dlq_collection = db["news-dlq"]
+        
+        # Find pending articles under max retries
+        pending_items = list(dlq_collection.find({
+            "status": "pending",
+            "retry_count": {"$lt": settings.dlq_max_retries}
+        }).limit(20)) # Process in small batches
+        
+        if not pending_items:
+            logger.info("DLQ is empty or has no items eligible for retry")
+            return stats
+            
+        logger.info("Found %d items in DLQ eligible for retry", len(pending_items))
+        
+        for item in pending_items:
+            stats["processed"] += 1
+            article_id = item["_id"]
+            url = item["url"]
+            title = item["title"]
+            source = item.get("source", "Unknown Source")
+            
+            logger.debug("DLQ Retrying: %s", url)
+            
+            # Attempt to extract text again
+            content = await fetch_article_text(client, url)
+            
+            now = datetime.now(timezone.utc)
+            
+            if content:
+                # Success! Recover the article
+                logger.info("DLQ Recovery successful for: %s", url)
+                
+                # We don't have the original RSS entry, so we create a minimal valid payload
+                article_payload = {
+                    "_id": article_id,
+                    "source": source,
+                    "title": title,
+                    "title_hash": generate_content_hash(title),
+                    "summary": "Recovered from DLQ",
+                    "content": content,
+                    "url": url,
+                    "published_at": now,
+                    "language": "en",
+                    "vectorized": False,
+                    "vectorized_at": None,
+                    "qdrant_chunk_ids": [],
+                    "content_length": len(content),
+                    "summary_length": len("Recovered from DLQ"),
+                }
+                
+                if validate_article_data(article_payload):
+                    save_news_to_db([article_payload])
+                    # Mark as resolved in DLQ
+                    dlq_collection.update_one(
+                        {"_id": article_id},
+                        {"$set": {"status": "resolved", "resolved_at": now}}
+                    )
+                    stats["recovered"] += 1
+                else:
+                    stats["errors"] += 1
+            else:
+                # Still failing
+                new_retry_count = item.get("retry_count", 0) + 1
+                update_doc = {
+                    "last_attempt_at": now,
+                    "retry_count": new_retry_count,
+                    "error_reason": "Extraction still failing after DLQ retry"
+                }
+                
+                if new_retry_count >= settings.dlq_max_retries:
+                    update_doc["status"] = "failed_permanently"
+                    stats["failed_permanently"] += 1
+                    logger.warning("DLQ item %s reached max retries and permanently failed", article_id)
+                
+                dlq_collection.update_one(
+                    {"_id": article_id},
+                    {"$set": update_doc}
+                )
+
+    except Exception as e:
+        logger.error("DLQ processing failed: %s", e)
+        stats["errors"] += 1
+
+    logger.info("DLQ processing completed: %s", stats)
+    return stats
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Pipeline Orchestration
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+async def collect_articles_from_feed(
+    client: StealthHttpClient, feed_url: str, max_articles: int = 5
+) -> Dict[str, Any]:
+    """Complete pipeline to collect articles from a single RSS feed.
+
+    Args:
+        client: Initialised StealthHttpClient instance.
+        feed_url: RSS feed URL.
+        max_articles: Maximum articles to collect.
+
+    Returns:
+        Dict with collection statistics.
     """
     logger.info("Starting article collection from feed: %s", feed_url)
 
     try:
         # Fetch RSS feed
-        rss_content = fetch_link(feed_url)
+        rss_content = await fetch_link(client, feed_url)
 
         # Parse feed
         entries, feed_info = parse_news(rss_content)
 
         # Create payloads
-        articles = create_payload(entries, feed_info, max_articles)
+        articles = await create_payload(client, entries, feed_info, max_articles)
 
         # Save to database
         if articles:
@@ -531,16 +677,16 @@ def collect_articles_from_feed(feed_url: str, max_articles: int = 5) -> Dict[str
                 "feed_url": feed_url,
                 "articles_collected": len(articles),
                 "database_stats": save_stats,
-                "feed_title": feed_info.get('title', 'Unknown')
+                "feed_title": feed_info.get('title', 'Unknown'),
             }
-        else:
-            logger.warning("No articles collected from %s", feed_url)
-            return {
-                "success": False,
-                "feed_url": feed_url,
-                "articles_collected": 0,
-                "error": "No articles could be processed"
-            }
+
+        logger.warning("No articles collected from %s", feed_url)
+        return {
+            "success": False,
+            "feed_url": feed_url,
+            "articles_collected": 0,
+            "error": "No articles could be processed",
+        }
 
     except Exception as e:
         logger.error("Article collection failed for %s: %s", feed_url, e)
@@ -548,12 +694,95 @@ def collect_articles_from_feed(feed_url: str, max_articles: int = 5) -> Dict[str
             "success": False,
             "feed_url": feed_url,
             "articles_collected": 0,
-            "error": str(e)
+            "error": str(e),
         }
 
+
+async def run_ingestion_pipeline() -> Dict[str, Any]:
+    """Run the full ingestion pipeline across all configured RSS feeds.
+
+    Returns:
+        Aggregated statistics for the entire pipeline run.
+    """
+    logger.info("═" * 60)
+    logger.info("Starting FinSight ingestion pipeline — %d feeds", len(RSS_FEEDS))
+    logger.info("═" * 60)
+
+    pipeline_stats: Dict[str, Any] = {
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "feeds_total": len(RSS_FEEDS),
+        "feeds_success": 0,
+        "feeds_failed": 0,
+        "articles_total": 0,
+        "results": [],
+    }
+
+    async with StealthHttpClient() as client:
+        for feed_name, feed_url in RSS_FEEDS.items():
+            logger.info("━━ Processing feed: %s", feed_name)
+            try:
+                result = await collect_articles_from_feed(
+                    client, feed_url, max_articles=settings.max_articles_per_batch
+                )
+                pipeline_stats["results"].append({
+                    "feed_name": feed_name,
+                    **result,
+                })
+
+                if result["success"]:
+                    pipeline_stats["feeds_success"] += 1
+                    pipeline_stats["articles_total"] += result["articles_collected"]
+                else:
+                    pipeline_stats["feeds_failed"] += 1
+
+            except Exception as e:
+                pipeline_stats["feeds_failed"] += 1
+                logger.error("Pipeline error for feed %s: %s", feed_name, e)
+                pipeline_stats["results"].append({
+                    "feed_name": feed_name,
+                    "success": False,
+                    "error": str(e),
+                })
+
+    pipeline_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    logger.info("═" * 60)
+    logger.info(
+        "Pipeline complete: %d/%d feeds OK, %d articles collected",
+        pipeline_stats["feeds_success"],
+        pipeline_stats["feeds_total"],
+        pipeline_stats["articles_total"],
+    )
+    logger.info("═" * 60)
+    
+    # Process DLQ after the main pipeline
+    try:
+        async with StealthHttpClient() as dlq_client:
+            dlq_stats = await process_dlq(dlq_client)
+            pipeline_stats["dlq_stats"] = dlq_stats
+    except Exception as e:
+        logger.error("Failed to run process_dlq during pipeline: %s", e)
+
+    return pipeline_stats
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Entrypoint
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 if __name__ == "__main__":
-    for test_url in test_feed:
-        url = fetch_link(test_feed[test_url])
-        entries, feed_info = parse_news(url)
-        news = create_payload(entries, feed_info, numb_articles=3)
-        save_news_to_db(news)
+    import sys
+    
+    if "--dlq-only" in sys.argv:
+        # Run only the DLQ processor
+        async def run_dlq_only():
+            logger.info("═" * 60)
+            logger.info("Starting isolated DLQ retry run")
+            logger.info("═" * 60)
+            async with StealthHttpClient() as client:
+                await process_dlq(client)
+        
+        asyncio.run(run_dlq_only())
+    else:
+        # Run the full pipeline
+        asyncio.run(run_ingestion_pipeline())

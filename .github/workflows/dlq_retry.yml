@@ -1,15 +1,15 @@
-name: Data Ingestion Pipeline
+name: DLQ Retry Pipeline
 
 on:
   schedule:
-    # Lance toutes les 24 heures (à 0h UTC)
-    - cron: '0 0 * * *'
+    # Lance toutes les 12 heures
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 jobs:
-  ingest-and-vectorize:
+  retry-dlq:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
 
     env:
       mongo_uri: ${{ secrets.MONGO_URI }}
@@ -41,19 +41,14 @@ jobs:
       - name: Create logs directory
         run: mkdir -p logs
 
-      - name: Run data collector
+      - name: Run DLQ Retry Worker
         run: |
-          uv run python -m src.ingestion.collector
-
-      - name: Run vectorizer
-        run: |
-          uv run python -m src.ingestion.vectorizer
+          uv run python -m src.ingestion.collector --dlq-only
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ingestion-logs
+          name: dlq-retry-logs
           path: logs/
           if-no-files-found: warn
-
