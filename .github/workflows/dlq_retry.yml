@@ -2,8 +2,8 @@ name: DLQ Retry Pipeline
 
 on:
   schedule:
-    # Lance toutes les 3 heures (pour retenter les échecs plus fréquemment que l'ingestion principale)
-    - cron: '0 */3 * * *'
+    # Lance toutes les 12 heures
+    - cron: '0 */12 * * *'
   workflow_dispatch:
 
 jobs:

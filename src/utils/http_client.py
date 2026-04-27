@@ -158,7 +158,7 @@ class StealthHttpClient:
     # ------------------------------------------------------------------ #
 
     async def _curl_request(
-        self, url: str, impersonate: str
+        self, url: str, impersonate: str, proxy: Optional[str] = None
     ) -> Optional[StealthResponse]:
         """Single curl_cffi request with dynamic headers."""
         headers = self._build_headers(url)
@@ -168,6 +168,7 @@ class StealthHttpClient:
                 url,
                 headers=headers,
                 impersonate=impersonate,
+                proxy=proxy,
                 timeout=self._timeout,
                 allow_redirects=True,
             )
@@ -201,19 +202,17 @@ class StealthHttpClient:
         )
 
     async def _scrape_do_request(self, url: str) -> Optional[StealthResponse]:
-        """Scrape.do API fallback to bypass severe IP bans."""
-        encoded_url = quote_plus(url)
-        scrape_do_url = f"https://api.scrape.do/?token={settings.scrape_do_api_key}&url={encoded_url}"
+        """Scrape.do Proxy fallback to bypass severe IP bans."""
+        proxy_url = f"http://{settings.scrape_do_api_key}:customHeaders=false@proxy.scrape.do:8080"
         
-        logger.debug("Attempting Scrape.do proxy for %s", url)
+        logger.debug("Attempting Scrape.do Proxy Mode for %s", url)
         
-        # We still use curl_cffi to mask our python script to scrape.do
-        resp = await self._curl_request(scrape_do_url, self._primary_impersonate)
+        # Call the original target URL using the Scrape.do proxy
+        resp = await self._curl_request(url, self._primary_impersonate, proxy=proxy_url)
         
-        # Scrape.do returns the target URL's HTML in the body.
-        # But if we got a 403 from scrape.do itself, it might be an auth error.
-        if resp and resp.status_code == 401:
-            logger.error("Scrape.do API authentication failed. Check your API key.")
+        # 407 means Proxy Authentication Required
+        if resp and resp.status_code in (401, 407):
+            logger.error("Scrape.do Proxy authentication failed. Check your API key.")
             return None
             
         return resp

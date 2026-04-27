@@ -254,7 +254,6 @@ def save_to_dlq(article_url: str, title: str, source: str, error_reason: str) ->
                 },
                 "$setOnInsert": {
                     "first_failed_at": now,
-                    "retry_count": 0,
                     "status": "pending",
                 },
                 "$inc": {"retry_count": 1}

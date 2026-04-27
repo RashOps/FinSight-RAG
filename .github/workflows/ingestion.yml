@@ -2,8 +2,8 @@ name: Data Ingestion Pipeline
 
 on:
   schedule:
-    # Lance toutes les 6 heures (à 0h, 6h, 12h, 18h UTC)
-    - cron: '0 */6 * * *'
+    # Lance toutes les 24 heures (à 0h UTC)
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
