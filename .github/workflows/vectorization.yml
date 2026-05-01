@@ -1,24 +1,26 @@
-name: Data Collection Pipeline
+name: Data Vectorization Pipeline
 
 on:
-  schedule:
-    # Lance toutes les 24 heures (à 0h UTC)
-    - cron: '0 0 * * *'
+  workflow_run:
+    workflows: ["Data Collection Pipeline"]
+    types: [completed]
   workflow_dispatch:
 
 jobs:
-  collect-data:
+  vectorize-data:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # S'exécute toujours après le collector, qu'il réussisse ou échoue
+    # Le vectorizer a ses propres protections pour gérer les cas où peu d'articles ont été scrapés
+
     env:
-      mongo_uri: ${{ secrets.MONGO_URI }}
       qdrant_url: ${{ secrets.QDRANT_URL }}
       qdrant_api_key: ${{ secrets.QDRANT_API_KEY }}
       groq_api_key: ${{ secrets.GROQ_API_KEY }}
       cohere_api_key: ${{ secrets.COHERE_API_KEY }}
+      mongo_uri: ${{ secrets.MONGO_URI }}
       mongo_db_name: "finsight-db"
-      scrape_do_api_key: ${{ secrets.SCRAPE_DO_API_KEY }}
 
     steps:
       - name: Checkout repository
@@ -41,15 +43,15 @@ jobs:
       - name: Create logs directory
         run: mkdir -p logs
 
-      - name: Run data collector
+      - name: Run vectorizer
         run: |
-          uv run python -m src.ingestion.collector
+          uv run python -m src.ingestion.vectorizer
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: collector-logs
+          name: vectorization-logs
           path: logs/
           if-no-files-found: warn
 
@@ -57,7 +59,6 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: collector-logs
+          name: vectorization-logs
           path: logs/
           if-no-files-found: warn
-
