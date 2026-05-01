@@ -44,7 +44,8 @@ FinSight RAG est un moteur de génération assistée par récupération (RAG) co
 
 ## 🚀 Déploiement
 
-[🌐 Application déployée](https://huggingface.co/spaces/RashOps/finsight-rag)
+- [🌐 Application déployée (API)](https://huggingface.co/spaces/RashOps/finsight-rag)
+- [🚀 Voir la démo (Interface)](https://www.rayhan-touboui.tech/decrypt-demos/finsight-rag)
 
 ## 📋 Prérequis
 
