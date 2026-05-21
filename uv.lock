@@ -748,6 +748,18 @@ wheels = [
 ]
 
 [[package]]
+name = "finnhub-python"
+version = "2.4.28"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7e/df/71b9abeef0490dbd8c77d996f6d34bce976eb7a270a12ea421a2a4f42746/finnhub_python-2.4.28.tar.gz", hash = "sha256:fac2850f0c152eea7c66eede7ba182ac73da1307c5b409a5f244c50d12622973", size = 13681, upload-time = "2026-04-22T07:16:56.102Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/09/b1/e5148acb6d99ecc850e60f25b4a71bc1ee49cf80db4c94d61fe15505fcc4/finnhub_python-2.4.28-py3-none-any.whl", hash = "sha256:64ae25a9fc25149d3399aefa5491cb43bdeb9ee1997a99e3abeea7d31c73cf7a", size = 12063, upload-time = "2026-04-22T07:16:54.882Z" },
+]
+
+[[package]]
 name = "finsight-rag"
 version = "0.1.0"
 source = { virtual = "." }
@@ -756,10 +768,13 @@ dependencies = [
     { name = "fake-useragent" },
     { name = "fastapi" },
     { name = "feedparser" },
+    { name = "finnhub-python" },
+    { name = "httpx" },
     { name = "llama-index" },
     { name = "llama-index-embeddings-cohere" },
     { name = "llama-index-embeddings-huggingface" },
     { name = "llama-index-llms-groq" },
+    { name = "llama-index-tools-openapi" },
     { name = "llama-index-vector-stores-qdrant" },
     { name = "logging" },
     { name = "pydantic" },
@@ -785,10 +800,13 @@ requires-dist = [
     { name = "fake-useragent", specifier = ">=2.0.3" },
     { name = "fastapi", specifier = ">=0.135.3" },
     { name = "feedparser", specifier = ">=6.0.12" },
+    { name = "finnhub-python", specifier = ">=2.4.28" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "llama-index", specifier = ">=0.14.16" },
     { name = "llama-index-embeddings-cohere", specifier = ">=0.8.0" },
     { name = "llama-index-embeddings-huggingface", specifier = ">=0.7.0" },
     { name = "llama-index-llms-groq", specifier = ">=0.5.0" },
+    { name = "llama-index-tools-openapi", specifier = ">=0.6.0" },
     { name = "llama-index-vector-stores-qdrant", specifier = ">=0.10.0" },
     { name = "logging", specifier = ">=0.4.9.6" },
     { name = "pydantic", specifier = ">=2.12.5" },
@@ -1517,6 +1535,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7b/09/e2a2b691e9ef6557a7d84585cac705ea68633cfd88aa4aaced71ea91f3af/llama_index_readers_llama_parse-0.6.1.tar.gz", hash = "sha256:66eb378632522170a4190bb9691ba2d74c4a475becbf5bad4e88a0cb5b7159a2", size = 3930, upload-time = "2026-03-25T14:32:06.686Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/76/15f093e3c3a883655fcce43b66c88466aa5b877c424f30394f344912caf3/llama_index_readers_llama_parse-0.6.1-py3-none-any.whl", hash = "sha256:335d8defecc299bd3a305ce5a4fffd9fce63594d1a5e427c08f839f21d4d8e40", size = 3275, upload-time = "2026-03-25T14:32:05.636Z" },
+]
+
+[[package]]
+name = "llama-index-tools-openapi"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "llama-index-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/62/91/14dbcd9395a85c8d9e55e1dc45ce15007b8e6599ed4d9d1cf86e4db6661c/llama_index_tools_openapi-0.6.0.tar.gz", hash = "sha256:ca0582a2fd94bd0df5612f8d4b20cec172a5e9638fd5878216f5d758afa82faa", size = 5065, upload-time = "2026-03-12T20:44:08.729Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/8e/eb946a9f19fad05f6045590a3c588eb21b86b8a68730c64b8cc7fab14019/llama_index_tools_openapi-0.6.0-py3-none-any.whl", hash = "sha256:df9b440897144723b6175e245af7981599fe609fc616b9002bcd8815ab413cf5", size = 4752, upload-time = "2026-03-12T20:44:07.705Z" },
 ]
 
 [[package]]
