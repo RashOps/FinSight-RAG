@@ -125,6 +125,37 @@ class Settings(BaseSettings):
         description="Group similar Marketaux articles by default"
     )
 
+    # Live API query configuration
+    live_api_providers_enabled: bool = Field(
+        default=False,
+        description="Enable live API providers for RAG queries"
+    )
+
+    enable_newsapi: bool = Field(
+        default=False,
+        description="Enable NewsAPI live provider"
+    )
+
+    enable_finnhub: bool = Field(
+        default=False,
+        description="Enable Finnhub live provider"
+    )
+
+    enable_marketaux: bool = Field(
+        default=False,
+        description="Enable Marketaux live provider"
+    )
+
+    default_search_sources: List[str] = Field(
+        default=["scraping"],
+        description="Default sources used for RAG queries"
+    )
+
+    allowed_search_sources: List[str] = Field(
+        default=["scraping", "newsapi", "finnhub", "marketaux"],
+        description="Allowed sources for RAG queries"
+    )
+
     # Log
     logs_dir: Path = Field(
         default=PROJECT_ROOT / "logs",
