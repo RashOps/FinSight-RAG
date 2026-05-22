@@ -14,7 +14,7 @@ jobs:
       - name: Auto-merge Dependabot PRs when checks pass
         uses: pascalgn/automerge-action@v0.15.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.TOKEN_BOT }}
           merge_method: squash
           # Require the default status checks to be successful before merging
           require: "status-success"
