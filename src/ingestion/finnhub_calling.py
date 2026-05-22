@@ -75,7 +75,10 @@ class FinnhubNewsProvider:
                     params=params
                 )
                 response.raise_for_status()
-                data = await response.json()
+                data = response.json()  # httpx returns the object directly, no await
+                # Finnhub returns a plain list, not {"data": [...]}
+                if isinstance(data, list):
+                    data = {"data": data}
                 logger.info(f"Successfully fetched {len(data.get('data', []))} articles from Finnhub")
                 return data
         except httpx.HTTPError as e:

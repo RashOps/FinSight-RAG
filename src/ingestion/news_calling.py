@@ -20,21 +20,14 @@ class BaseNewsProvider:
         self.headers = self._get_headers()
     
     def _get_headers(self) -> Dict[str, str]:
-        """Get stealth headers to avoid blocking"""
+        """Get stealth headers to avoid blocking."""
+        # Note: Do NOT set Accept-Encoding manually — httpx handles gzip decompression
+        # automatically only when it negotiates the encoding itself.
         return {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept": "application/json, text/html, */*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Ch-Ua": '\"Not(A:Brand\";v=\"99\", \"Google Chrome\";v=\"120\"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '\"Windows\"',
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-User": "?1",
-            "Sec-Fetch-Dest": "document"
         }
 
 
@@ -117,7 +110,7 @@ class NewsApiProvider(BaseNewsProvider):
                     headers=self.headers
                 )
                 response.raise_for_status()
-                data = await response.json()
+                data = response.json()  # httpx: .json() is synchronous, no await
                 logger.info(f"NewsAPI /everything: Found {data.get('totalResults', 0)} articles for '{q}'")
                 return data
         except httpx.HTTPError as e:
@@ -178,7 +171,7 @@ class NewsApiProvider(BaseNewsProvider):
                     headers=self.headers
                 )
                 response.raise_for_status()
-                data = await response.json()
+                data = response.json()  # httpx: .json() is synchronous, no await
                 logger.info(f"NewsAPI /top-headlines: Found {len(data.get('articles', []))} headlines")
                 return data
         except httpx.HTTPError as e:
@@ -291,7 +284,7 @@ class MarketauxProvider(BaseNewsProvider):
                     headers=self.headers
                 )
                 response.raise_for_status()
-                data = await response.json()
+                data = response.json()  # httpx: .json() is synchronous, no await
                 logger.info(f"Marketaux: Found {len(data.get('data', []))} financial news articles")
                 return data
         except httpx.HTTPError as e:
