@@ -3,10 +3,12 @@ from llama_index.llms.groq import Groq
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.cohere import CohereEmbedding
 from llama_index.core import VectorStoreIndex, Settings
-from llama_index.vector_stores.qdrant import QdrantVectorStore
 from llama_index.core.llms import LLM
 from llama_index.core.embeddings import BaseEmbedding
-from typing import Optional
+from llama_index.core.schema import Document
+from llama_index.core.query_engine import BaseQueryEngine
+from llama_index.vector_stores.qdrant import QdrantVectorStore
+from typing import List, Optional
 from src.utils.logger import get_logger
 from src.rag.prompts import QA_PROMPT
 from src.config import settings
@@ -160,6 +162,24 @@ def get_query_engine():
     except Exception as e:
         logger.error("Failed to initialize query engine: %s", e)
         raise
+
+
+def build_query_engine_from_documents(documents: List[Document]) -> BaseQueryEngine:
+    """Create a temporary in-memory query engine from documents."""
+    if not documents:
+        raise ValueError("No documents available to build query engine")
+
+    brain_setup()
+    index = VectorStoreIndex.from_documents(documents)
+    engine = index.as_query_engine(
+        llm=Settings.llm,
+        similarity_top_k=5,
+        text_qa_template=QA_PROMPT,
+        streaming=False,
+        node_postprocessors=[],
+    )
+    return engine
+
 
 def test_query_engine(engine) -> bool:
     """

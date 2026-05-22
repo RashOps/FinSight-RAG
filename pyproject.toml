@@ -1,7 +1,7 @@
 [project]
 name = "finsight-rag"
 version = "0.1.0"
-description = "Add your description here"
+description = "Financial RAG for news"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -22,6 +22,9 @@ dependencies = [
     "sentence-transformers>=5.4.0",
     "trafilatura>=2.0.0",
     "uvicorn>=0.44.0",
+    "httpx>=0.28.1",
+    "finnhub-python>=2.4.28",
+    "llama-index-tools-openapi>=0.6.0",
 ]
 
 [dependency-groups]

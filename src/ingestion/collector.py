@@ -264,9 +264,32 @@ def save_to_dlq(article_url: str, title: str, source: str, error_reason: str) ->
     except Exception as e:
         logger.error("Failed to save article to DLQ: %s", e)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _parse_article_date(raw_date):
+    """Parse a publication timestamp into a datetime object."""
+    if raw_date is None:
+        return None
+
+    try:
+        if isinstance(raw_date, (int, float)):
+            return datetime.fromtimestamp(int(raw_date), timezone.utc)
+
+        if isinstance(raw_date, str):
+            parsed = standardize_date(raw_date)
+            if parsed:
+                return parsed
+    except Exception:
+        pass
+
+    return None
+
+
+# API provider payload helpers were removed from the RSS ingestion pipeline.
+# Live API provider calls are handled directly by the RAG layer, not by collector.py.
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Payload Creation
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
 async def create_payload(
@@ -698,8 +721,8 @@ async def collect_articles_from_feed(
         }
 
 
-async def run_ingestion_pipeline() -> Dict[str, Any]:
-    """Run the full ingestion pipeline across all configured RSS feeds.
+async def run_ingestion_pipeline(max_articles: int = None) -> Dict[str, Any]:
+    """Run the full ingestion pipeline across RSS feeds only.
 
     Returns:
         Aggregated statistics for the entire pipeline run.
@@ -707,6 +730,9 @@ async def run_ingestion_pipeline() -> Dict[str, Any]:
     logger.info("═" * 60)
     logger.info("Starting FinSight ingestion pipeline — %d feeds", len(RSS_FEEDS))
     logger.info("═" * 60)
+
+    if max_articles is None:
+        max_articles = settings.max_articles_per_batch
 
     pipeline_stats: Dict[str, Any] = {
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -722,7 +748,7 @@ async def run_ingestion_pipeline() -> Dict[str, Any]:
             logger.info("━━ Processing feed: %s", feed_name)
             try:
                 result = await collect_articles_from_feed(
-                    client, feed_url, max_articles=settings.max_articles_per_batch
+                    client, feed_url, max_articles=max_articles
                 )
                 pipeline_stats["results"].append({
                     "feed_name": feed_name,

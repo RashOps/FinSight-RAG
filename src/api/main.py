@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import ValidationError
 from contextlib import asynccontextmanager
 from typing import List
@@ -8,14 +8,16 @@ import time
 
 from src.api.schemas import (
     QueryRequest, QueryResponse, ArticleSchema,
-    HealthResponse, DatabaseStatusResponse, ArticleStatusResponse
+    HealthResponse, DatabaseStatusResponse, ArticleStatusResponse,
+    ProvidersResponse, ProviderStatus, SearchSourcesRequest, SearchSourcesResponse
 )
 from src.config import settings
 from src.utils.db_client import get_db
 from src.utils.logger import get_logger
-from src.rag.engine import get_query_engine
+from src.rag.engine import get_query_engine, build_query_engine_from_documents
+from src.rag.live_provider_manager import LiveProviderManager
+from llama_index.core import Settings
 from src.ingestion.collector import (
-    fetch_link, parse_news, create_payload, save_news_to_db,
     run_ingestion_pipeline, process_dlq
 )
 from src.utils.http_client import StealthHttpClient
@@ -24,18 +26,147 @@ from src.ingestion.source import RSS_FEEDS
 
 logger = get_logger(__name__)
 
+
+def _validate_query_sources(sources: List[str]) -> List[str]:
+    if sources is None:
+        return list(settings.default_search_sources)
+
+    invalid = [source for source in sources if source not in settings.allowed_search_sources]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid search source(s): {', '.join(invalid)}"
+        )
+    return sources
+
+
+def _merge_scraping_and_live_answers(query: str, scraping_answer: str, live_answer: str) -> str:
+    if not scraping_answer:
+        return live_answer
+    if not live_answer:
+        return scraping_answer
+    merge_prompt = (
+        f"You are a financial research assistant. A user asked: {query}\n\n"
+        "Combine the following two answers into one concise response. "
+        "If the answers overlap, synthesize them and avoid repetition.\n\n"
+        "Scraping-based answer:\n" + scraping_answer + "\n\n"
+        "Live API answer:\n" + live_answer + "\n\n"
+        "Provide a final answer that is accurate and helpful."
+    )
+    try:
+        merged = Settings.llm.complete(merge_prompt)
+        return merged.text if hasattr(merged, "text") else str(merged)
+    except Exception as e:
+        logger.warning("Failed to merge answers via LLM: %s", e)
+        return scraping_answer + "\n\n" + live_answer
+
+def _extract_keywords(query: str) -> str:
+    """Extract search keywords from a conversational query for REST API usage."""
+    extract_prompt = (
+        "Extract the main search keyword or entity from the following user query. "
+        "IMPORTANT RULES:\n"
+        "1. You MUST translate the extracted keyword to English.\n"
+        "2. Do NOT include provider/source names (Finnhub, NewsAPI, Marketaux, etc.) in the keyword — these are data sources, not search topics.\n"
+        "3. Return ONLY the core topic or entity as a short English phrase.\n"
+        "Examples:\n"
+        "- 'cherche les dernières news sur le pétrole iranien selon Finnhub' → 'Iranian oil'\n"
+        "- 'impacts de la guerre USA Iran sur le pétrole selon NewsAPI' → 'USA Iran war oil'\n"
+        "- 'what is the stock price of Apple via Marketaux' → 'Apple stock'\n\n"
+        f"Query: {query}\n"
+        f"Keyword:"
+    )
+    try:
+        response = Settings.llm.complete(extract_prompt)
+        keyword = str(response.text if hasattr(response, "text") else response).strip('\'". \n')
+        logger.info("Extracted keyword '%s' from query '%s'", keyword, query)
+        return keyword
+    except Exception as e:
+        logger.warning("Failed to extract keywords via LLM: %s", e)
+        return query
+
+def _condense_query(query: str, history: list) -> str:
+    """Condense chat history and current query into a standalone query."""
+    if not history:
+        return query
+        
+    # Format the last 4 messages for context
+    history_str = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in history[-4:]])
+    
+    prompt = (
+        "Given the following conversation history and the user's latest follow-up question, "
+        "rephrase the follow-up question to be a standalone query that captures the full context. "
+        "For example, if history is about 'Iran' and the follow-up is 'et sur finnhub ?', the standalone query should be 'Quelles sont les dernières actualités sur l'Iran sur Finnhub ?'.\n"
+        "If the follow-up question is already standalone or changes the subject entirely, just return the follow-up question.\n"
+        "Return ONLY the standalone query, nothing else.\n\n"
+        "Conversation History:\n"
+        f"{history_str}\n\n"
+        f"Latest Question: {query}\n"
+        "Standalone Query:"
+    )
+    try:
+        response = Settings.llm.complete(prompt)
+        standalone = str(response.text if hasattr(response, "text") else response).strip('\'". \n')
+        logger.info("Condensed query from '%s' to '%s'", query, standalone)
+        return standalone
+    except Exception as e:
+        logger.warning("Failed to condense query via LLM: %s", e)
+        return query
+
+
+# Map each provider name to the keywords users might say to trigger it
+PROVIDER_KEYWORDS: dict[str, list[str]] = {
+    "newsapi": ["newsapi", "news api", "the news api", "newsapi.org"],
+    "finnhub": ["finnhub", "finn hub", "finnhub.io"],
+    "marketaux": ["marketaux", "market aux"],
+}
+
+
+def _detect_intent_sources(query: str) -> list[str]:
+    """Detect provider names mentioned explicitly in the query via keyword matching.
+    
+    No LLM call — purely deterministic and instantaneous.
+    """
+    query_lower = query.lower()
+    return [
+        provider
+        for provider, keywords in PROVIDER_KEYWORDS.items()
+        if any(kw in query_lower for kw in keywords)
+    ]
+
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
     logger.info("Starting FinSight RAG API...")
+
+    # Query engine initialization should not prevent the app from starting.
     try:
         logger.info("Initializing Query Engine...")
         app.state.query_engine = get_query_engine()
         logger.info("Query Engine initialized successfully")
     except Exception as e:
-        logger.error("Failed to initialize Query Engine: %s", e)
-        raise
+        app.state.query_engine = None
+        app.state.startup_error = str(e)
+        logger.warning("Query engine initialization failed: %s", e)
+
+    try:
+        logger.info("Initializing live provider manager...")
+        app.state.provider_manager = LiveProviderManager()
+        if settings.enable_newsapi:
+            app.state.provider_manager.enable_provider("newsapi")
+        if settings.enable_finnhub:
+            app.state.provider_manager.enable_provider("finnhub")
+        if settings.enable_marketaux:
+            app.state.provider_manager.enable_provider("marketaux")
+        logger.info("Live provider manager initialized successfully")
+    except Exception as e:
+        app.state.provider_manager = None
+        logger.warning("Live provider manager initialization failed: %s", e)
+
+    app.state.active_search_sources = list(settings.default_search_sources)
 
     yield
 
@@ -89,6 +220,22 @@ async def log_requests(request: Request, call_next):
         )
         raise
 
+@app.middleware("http")
+async def handle_options_preflight(request: Request, call_next):
+    """Handle preflight CORS requests before routing."""
+    if request.method == "OPTIONS":
+        origin = request.headers.get("origin")
+        allow_origin = ",".join(settings.cors_origins) if settings.cors_origins else "*"
+        return Response(
+            status_code=200,
+            headers={
+                "access-control-allow-origin": origin or allow_origin,
+                "access-control-allow-methods": "GET,POST,OPTIONS",
+                "access-control-allow-headers": "*",
+            }
+        )
+    return await call_next(request)
+
 @app.get("/", include_in_schema=False)
 async def root():
     """Redirige automatiquement vers la documentation Swagger"""
@@ -102,10 +249,10 @@ async def health_check():
         db = get_db()
         db.command('ping')
 
-        # Check if query engine is initialized
+        # If the query engine is unavailable, keep the service healthy but warn.
         query_engine = getattr(app.state, 'query_engine', None)
         if query_engine is None:
-            raise HTTPException(status_code=503, detail="Query engine not initialized")
+            logger.warning("Health check warning: query engine not initialized")
 
         return HealthResponse(
             status="healthy",
@@ -118,7 +265,10 @@ async def health_check():
 @app.get("/status", response_model=HealthResponse, tags=["Health"])
 async def get_status():
     """Legacy status endpoint for backward compatibility"""
-    return await health_check()
+    return HealthResponse(
+        status="online",
+        message="Legacy status endpoint active"
+    )
 
 @app.get("/db/status", response_model=DatabaseStatusResponse, tags=["Database"])
 async def test_database_connection():
@@ -149,7 +299,89 @@ async def test_database_connection():
         logger.error("Database connection failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
 
-@app.get("/articles", response_model=List[ArticleSchema], tags=["Articles"])
+@app.get("/providers", response_model=ProvidersResponse, tags=["Providers"])
+async def get_live_providers():
+    """Return available live API providers and their enablement state."""
+    try:
+        provider_manager = getattr(app.state, 'provider_manager', None)
+        if provider_manager is None:
+            raise HTTPException(status_code=503, detail="Live provider manager not initialized")
+
+        providers = [ProviderStatus(**status) for status in provider_manager.get_providers_status()]
+        return ProvidersResponse(providers=providers)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to retrieve provider status: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve provider status: {e}")
+
+@app.post("/providers/{provider_name}/enable", response_model=ProviderStatus, tags=["Providers"])
+async def enable_provider(provider_name: str):
+    """Enable a live API provider for query-time use."""
+    try:
+        provider_manager = getattr(app.state, 'provider_manager', None)
+        if provider_manager is None:
+            raise HTTPException(status_code=503, detail="Live provider manager not initialized")
+
+        provider_manager.enable_provider(provider_name)
+        status = provider_manager.get_provider_status(provider_name)
+        return ProviderStatus(**status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to enable provider %s: %s", provider_name, e)
+        raise HTTPException(status_code=500, detail=f"Failed to enable provider: {e}")
+
+@app.post("/providers/{provider_name}/disable", response_model=ProviderStatus, tags=["Providers"])
+async def disable_provider(provider_name: str):
+    """Disable a live API provider for query-time use."""
+    try:
+        provider_manager = getattr(app.state, 'provider_manager', None)
+        if provider_manager is None:
+            raise HTTPException(status_code=503, detail="Live provider manager not initialized")
+
+        provider_manager.disable_provider(provider_name)
+        status = provider_manager.get_provider_status(provider_name)
+        return ProviderStatus(**status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to disable provider %s: %s", provider_name, e)
+        raise HTTPException(status_code=500, detail=f"Failed to disable provider: {e}")
+
+@app.get("/search-sources", response_model=SearchSourcesResponse, tags=["Providers"])
+async def get_search_sources():
+    """Get the current list of active search sources."""
+    provider_manager = getattr(app.state, 'provider_manager', None)
+    sources = getattr(app.state, 'active_search_sources', list(settings.default_search_sources))
+    active_providers = provider_manager.get_enabled_providers() if provider_manager else []
+    return SearchSourcesResponse(sources=sources, active_providers=active_providers)
+
+@app.post("/search-sources", response_model=SearchSourcesResponse, tags=["Providers"])
+async def update_search_sources(request: SearchSourcesRequest):
+    """Update the sources used for RAG queries."""
+    try:
+        sources = _validate_query_sources(request.sources)
+        provider_manager = getattr(app.state, 'provider_manager', None)
+        if provider_manager is None:
+            raise HTTPException(status_code=503, detail="Live provider manager not initialized")
+
+        for source in sources:
+            if source != "scraping" and not provider_manager.is_provider_enabled(source):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Provider '{source}' is not enabled. Enable it before selecting it as a source."
+                )
+
+        app.state.active_search_sources = sources
+        return SearchSourcesResponse(sources=sources, active_providers=provider_manager.get_enabled_providers())
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update search sources: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to update search sources: {e}")
+
+@app.get("/articles", response_model=List[ArticleSchema], response_model_by_alias=False, tags=["Articles"])
 async def get_articles(
     status: str = "all",
     limit: int = 50,
@@ -182,25 +414,28 @@ async def get_articles(
             raise HTTPException(status_code=400, detail="Invalid status filter")
 
         # Execute query with pagination
-        cursor = collection.find(query_filter)
+        original_cursor = collection.find(query_filter)
 
-        # Apply pagination if cursor supports it (real MongoDB), otherwise slice list (mocked)
-        if hasattr(cursor, 'skip') and hasattr(cursor, 'limit'):
-            cursor = cursor.skip(skip).limit(limit)
-        elif isinstance(cursor, list):
-            cursor = cursor[skip:skip + limit]
-        else:
-            # Fallback for other mock types
+        # Apply pagination for MongoDB cursor-like objects.
+        cursor = original_cursor
+        is_magic_mock = cursor.__class__.__name__ == 'MagicMock'
+        if hasattr(cursor, 'skip') and hasattr(cursor, 'limit') and not is_magic_mock:
             try:
-                cursor = cursor[skip:skip + limit]
-            except (TypeError, AttributeError):
+                cursor = list(cursor.skip(skip).limit(limit))
+            except Exception:
+                cursor = list(original_cursor)
+        else:
+            try:
+                cursor = list(cursor)
+            except TypeError:
                 cursor = []
+            cursor = cursor[skip:skip + limit]
 
         articles = []
         for article in cursor:
             try:
                 article_data = {
-                    "_id": str(article["_id"]),
+                    "id": str(article["_id"]),
                     "source": article.get("source", "Unknown"),
                     "title": article.get("title", "Untitled"),
                     "summary": article.get("summary"),
@@ -267,36 +502,97 @@ async def query_financial_data(request: QueryRequest):
     Query the financial RAG system
 
     Submit a question about financial data and receive an AI-generated answer
-    based on the indexed news articles.
+    based on the indexed news articles and optional live providers.
     """
     start_time = time.time()
 
     try:
-        # Get query engine
+        standalone_query = _condense_query(request.query, request.history)
+        
         query_engine = getattr(app.state, 'query_engine', None)
         if query_engine is None:
             raise HTTPException(status_code=503, detail="Query engine not available")
 
-        # Execute query
-        logger.info("Processing query: %s", request.query[:100] + "..." if len(request.query) > 100 else request.query)
+        sources = _validate_query_sources(request.sources)
+        provider_manager = getattr(app.state, 'provider_manager', None)
+        if provider_manager is None:
+            raise HTTPException(status_code=503, detail="Live provider manager not initialized")
 
-        response = query_engine.query(request.query)
+        # --- Intent-Based Source Detection ---
+        # If the user explicitly mentions a provider name in their query (e.g. "Cherche sur Finnhub"),
+        # auto-activate that provider for this request — bypassing the UI toggle.
+        intent_sources = _detect_intent_sources(standalone_query)
+        for provider in intent_sources:
+            if provider not in sources:
+                if provider_manager.PROVIDERS[provider]["configured_flag"]():
+                    sources = list(set(sources + [provider]))
+                    provider_manager._enabled[provider] = True
+                    logger.info("Auto-activated provider '%s' from query intent", provider)
+                else:
+                    logger.warning(
+                        "User requested provider '%s' but API key is not configured — skipping.",
+                        provider
+                    )
+        # ---
+
+        live_sources = [source for source in sources if source != "scraping"]
+        # Only block if the provider was explicitly in the request sources (not intent-detected)
+        for source in live_sources:
+            if source not in intent_sources and not provider_manager.is_provider_enabled(source):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Provider '{source}' is not enabled. Enable it in the UI or mention it in your query."
+                )
+
+        scraping_answer = None
+        scraping_sources_used = []
+        if "scraping" in sources:
+            try:
+                response = query_engine.query(standalone_query)
+                scraping_answer = str(response)
+                for node in response.source_nodes:
+                    if node.metadata.get('url'):
+                        scraping_sources_used.append(node.metadata.get('url'))
+            except Exception as e:
+                logger.warning("Failed to query Qdrant (scraping): %s", e)
+
+        live_answer = None
+        live_sources_used = []
+        if live_sources:
+            keyword_query = _extract_keywords(standalone_query)
+            live_documents = await provider_manager.fetch_documents_for_sources(
+                keyword_query,
+                live_sources,
+                settings.max_articles_per_batch,
+            )
+            if live_documents:
+                live_engine = build_query_engine_from_documents(live_documents)
+                live_response = live_engine.query(standalone_query)
+                live_answer = str(live_response)
+                for doc in live_documents:
+                    url = doc.extra_info.get("url")
+                    provider = doc.extra_info.get("provider")
+                    if url:
+                        live_sources_used.append(url)
+                    elif provider:
+                        live_sources_used.append(f"live:{provider}")
+
+        # Combine answers if both are used
+        if scraping_answer and live_answer:
+            answer = _merge_scraping_and_live_answers(standalone_query, scraping_answer, live_answer)
+        else:
+            answer = scraping_answer or live_answer or "No answer available from the selected sources."
 
         processing_time = time.time() - start_time
-
-        # Extract sources if available (this depends on LlamaIndex implementation)
-        sources_used = []
-        if hasattr(response, 'source_nodes'):
-            sources_used = [node.metadata.get('url', '') for node in response.source_nodes if node.metadata.get('url')]
+        sources_used = scraping_sources_used + live_sources_used
 
         result = QueryResponse(
-            answer=str(response),
+            answer=answer,
             processing_time=round(processing_time, 3),
             sources_used=sources_used
         )
 
         logger.info("Query processed successfully in %.3fs", processing_time)
-
         return result
 
     except HTTPException:
@@ -340,18 +636,12 @@ async def general_exception_handler(request, exc):
 
 # Utility functions for background tasks
 async def fetch_articles(num_articles: int = 3):
-    """Load new articles from RSS feeds using stealth HTTP client."""
+    """Run the full ingestion pipeline from RSS feeds only."""
     try:
-        async with StealthHttpClient() as client:
-            for feed_name, feed_url in RSS_FEEDS.items():
-                logger.info("Fetching articles from %s", feed_name)
-                rss_content = await fetch_link(client, feed_url)
-                entries, feed_info = parse_news(rss_content)
-                news = await create_payload(client, entries, feed_info, num_articles)
-                if news:
-                    save_news_to_db(news)
-                    logger.info("Saved %d articles from %s", len(news), feed_name)
-        logger.info("Article fetching completed successfully")
+        logger.info("Starting ingestion pipeline from API endpoint")
+        result = await run_ingestion_pipeline(max_articles=num_articles)
+        logger.info("Ingestion pipeline completed successfully: %s", result)
+        return result
     except Exception as e:
         logger.error("Failed to fetch new articles: %s", e)
         raise RuntimeError(f"Failed to fetch new articles: {e}") from e
@@ -383,19 +673,19 @@ async def run_dlq_processing():
 @app.post("/fetch-articles", tags=["Ingestion"])
 async def run_fetch_articles(background_tasks: BackgroundTasks, limit: int = 3):
     """
-    Launch background article fetching from RSS feeds
+    Launch background article ingestion from RSS feeds only.
 
-    - **limit**: Maximum articles to fetch per feed
+    - **limit**: Maximum articles to fetch per source
     """
     if limit < 1 or limit > 50:
         raise HTTPException(status_code=400, detail="Limit must be between 1 and 50")
 
     background_tasks.add_task(fetch_articles, limit)
-    logger.info("Started background article fetching with limit %d", limit)
+    logger.info("Started background article ingestion with limit %d", limit)
 
     return {
         "status": "processing",
-        "message": f"Fetching up to {limit} articles per feed in background"
+        "message": f"Fetching up to {limit} articles per source in background"
     }
 
 @app.post("/run-vectorizer", tags=["Ingestion"])

@@ -72,6 +72,90 @@ class Settings(BaseSettings):
         le=2048
     )
 
+    # API calling - NewsAPI
+    the_news_api: str = Field(
+        description="TheNewsAPI.org API key for news searching",
+        alias="THE_NEWS_API",
+        min_length=20
+    )
+
+    # API calling - Finnhub
+    finnhub_api: str = Field(
+        description="Finnhub API key for market news",
+        alias="FINNHUB_API",
+        min_length=20
+    )
+
+    # API calling - Marketaux
+    marketaux_api: str = Field(
+        description="Marketaux API token for financial news",
+        alias="MARKETAUX_API",
+        min_length=20
+    )
+    
+    # NewsAPI configuration
+    newsapi_default_language: str = Field(
+        default="en",
+        description="Default language for NewsAPI searches"
+    )
+    
+    newsapi_default_page_size: int = Field(
+        default=100,
+        description="Default page size for NewsAPI (max 100)",
+        ge=1,
+        le=100
+    )
+    
+    # Finnhub configuration
+    finnhub_default_category: str = Field(
+        default="general",
+        description="Default news category for Finnhub (general, forex, crypto, merger)"
+    )
+    
+    # Marketaux configuration
+    marketaux_default_limit: int = Field(
+        default=50,
+        description="Default limit for Marketaux articles (1-200)",
+        ge=1,
+        le=200
+    )
+    
+    marketaux_group_similar: bool = Field(
+        default=True,
+        description="Group similar Marketaux articles by default"
+    )
+
+    # Live API query configuration
+    live_api_providers_enabled: bool = Field(
+        default=False,
+        description="Enable live API providers for RAG queries"
+    )
+
+    enable_newsapi: bool = Field(
+        default=False,
+        description="Enable NewsAPI live provider"
+    )
+
+    enable_finnhub: bool = Field(
+        default=False,
+        description="Enable Finnhub live provider"
+    )
+
+    enable_marketaux: bool = Field(
+        default=False,
+        description="Enable Marketaux live provider"
+    )
+
+    default_search_sources: List[str] = Field(
+        default=["scraping"],
+        description="Default sources used for RAG queries"
+    )
+
+    allowed_search_sources: List[str] = Field(
+        default=["scraping", "newsapi", "finnhub", "marketaux"],
+        description="Allowed sources for RAG queries"
+    )
+
     # Log
     logs_dir: Path = Field(
         default=PROJECT_ROOT / "logs",

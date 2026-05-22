@@ -11,6 +11,14 @@ class QueryRequest(BaseModel):
         max_length=1000,
         description="The user's question about financial data"
     )
+    sources: Optional[List[str]] = Field(
+        default=None,
+        description="Optional list of sources to query: scraping, newsapi, finnhub, marketaux"
+    )
+    history: Optional[List[dict]] = Field(
+        default_factory=list,
+        description="Optional chat history to provide context for follow-up questions"
+    )
 
     @field_validator('query')
     @classmethod
@@ -56,8 +64,35 @@ class QueryResponse(BaseModel):
     )
     sources_used: Optional[List[str]] = Field(
         default_factory=list,
-        description="List of source URLs used to generate the answer"
+        description="List of source URLs or provider names used to generate the answer"
     )
+    processing_time: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Time taken to process the query in seconds"
+    )
+
+class ProviderStatus(BaseModel):
+    """Schema for provider status metadata"""
+    name: str
+    enabled: bool
+    configured: bool
+    description: Optional[str] = None
+
+class ProvidersResponse(BaseModel):
+    """Schema for provider status listing"""
+    providers: List[ProviderStatus]
+
+class SearchSourcesRequest(BaseModel):
+    """Schema for updating active search sources"""
+    sources: List[str] = Field(
+        ..., description="Selected sources for the query pipeline"
+    )
+
+class SearchSourcesResponse(BaseModel):
+    """Schema for the current active search sources"""
+    sources: List[str]
+    active_providers: List[str]
     processing_time: Optional[float] = Field(
         default=None,
         ge=0.0,

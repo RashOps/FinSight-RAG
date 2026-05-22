@@ -338,8 +338,17 @@ def vectorize_articles(num_articles: int = 5, embedding_model: str = None):
 
 if __name__ == "__main__":
     try:
-        result = vectorize_articles()
-        print(f"Vectorization result: {result}")
+        total_vectorized = 0
+        while True:
+            logger.info("Starting a new vectorization batch...")
+            result = vectorize_articles(num_articles=50)
+            vectorized_this_batch = result.get("vectorized", 0)
+            total_vectorized += vectorized_this_batch
+            print(f"Batch vectorization result: {result}")
+            
+            if vectorized_this_batch == 0:
+                print(f"Finished. Total articles vectorized in this run: {total_vectorized}")
+                break
     except Exception as e:
         print(f"Vectorization failed: {e}")
         exit(1)

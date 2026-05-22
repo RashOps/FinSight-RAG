@@ -2,8 +2,8 @@ name: Data Collection Pipeline
 
 on:
   schedule:
-    # Lance toutes les 24 heures (à 0h UTC)
-    - cron: '0 0 * * *'
+    # Lance chaque dimanche à 0h UTC
+    - cron: '0 0 * * 0'
   workflow_dispatch:
 
 jobs:
