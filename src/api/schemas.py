@@ -15,6 +15,10 @@ class QueryRequest(BaseModel):
         default=None,
         description="Optional list of sources to query: scraping, newsapi, finnhub, marketaux"
     )
+    history: Optional[List[dict]] = Field(
+        default_factory=list,
+        description="Optional chat history to provide context for follow-up questions"
+    )
 
     @field_validator('query')
     @classmethod

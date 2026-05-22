@@ -60,6 +60,81 @@ def _merge_scraping_and_live_answers(query: str, scraping_answer: str, live_answ
         logger.warning("Failed to merge answers via LLM: %s", e)
         return scraping_answer + "\n\n" + live_answer
 
+def _extract_keywords(query: str) -> str:
+    """Extract search keywords from a conversational query for REST API usage."""
+    extract_prompt = (
+        "Extract the main search keyword or entity from the following user query. "
+        "IMPORTANT RULES:\n"
+        "1. You MUST translate the extracted keyword to English.\n"
+        "2. Do NOT include provider/source names (Finnhub, NewsAPI, Marketaux, etc.) in the keyword — these are data sources, not search topics.\n"
+        "3. Return ONLY the core topic or entity as a short English phrase.\n"
+        "Examples:\n"
+        "- 'cherche les dernières news sur le pétrole iranien selon Finnhub' → 'Iranian oil'\n"
+        "- 'impacts de la guerre USA Iran sur le pétrole selon NewsAPI' → 'USA Iran war oil'\n"
+        "- 'what is the stock price of Apple via Marketaux' → 'Apple stock'\n\n"
+        f"Query: {query}\n"
+        f"Keyword:"
+    )
+    try:
+        response = Settings.llm.complete(extract_prompt)
+        keyword = str(response.text if hasattr(response, "text") else response).strip('\'". \n')
+        logger.info("Extracted keyword '%s' from query '%s'", keyword, query)
+        return keyword
+    except Exception as e:
+        logger.warning("Failed to extract keywords via LLM: %s", e)
+        return query
+
+def _condense_query(query: str, history: list) -> str:
+    """Condense chat history and current query into a standalone query."""
+    if not history:
+        return query
+        
+    # Format the last 4 messages for context
+    history_str = "\n".join([f"{msg.get('role', 'user')}: {msg.get('content', '')}" for msg in history[-4:]])
+    
+    prompt = (
+        "Given the following conversation history and the user's latest follow-up question, "
+        "rephrase the follow-up question to be a standalone query that captures the full context. "
+        "For example, if history is about 'Iran' and the follow-up is 'et sur finnhub ?', the standalone query should be 'Quelles sont les dernières actualités sur l'Iran sur Finnhub ?'.\n"
+        "If the follow-up question is already standalone or changes the subject entirely, just return the follow-up question.\n"
+        "Return ONLY the standalone query, nothing else.\n\n"
+        "Conversation History:\n"
+        f"{history_str}\n\n"
+        f"Latest Question: {query}\n"
+        "Standalone Query:"
+    )
+    try:
+        response = Settings.llm.complete(prompt)
+        standalone = str(response.text if hasattr(response, "text") else response).strip('\'". \n')
+        logger.info("Condensed query from '%s' to '%s'", query, standalone)
+        return standalone
+    except Exception as e:
+        logger.warning("Failed to condense query via LLM: %s", e)
+        return query
+
+
+# Map each provider name to the keywords users might say to trigger it
+PROVIDER_KEYWORDS: dict[str, list[str]] = {
+    "newsapi": ["newsapi", "news api", "the news api", "newsapi.org"],
+    "finnhub": ["finnhub", "finn hub", "finnhub.io"],
+    "marketaux": ["marketaux", "market aux"],
+}
+
+
+def _detect_intent_sources(query: str) -> list[str]:
+    """Detect provider names mentioned explicitly in the query via keyword matching.
+    
+    No LLM call — purely deterministic and instantaneous.
+    """
+    query_lower = query.lower()
+    return [
+        provider
+        for provider, keywords in PROVIDER_KEYWORDS.items()
+        if any(kw in query_lower for kw in keywords)
+    ]
+
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -432,6 +507,8 @@ async def query_financial_data(request: QueryRequest):
     start_time = time.time()
 
     try:
+        standalone_query = _condense_query(request.query, request.history)
+        
         query_engine = getattr(app.state, 'query_engine', None)
         if query_engine is None:
             raise HTTPException(status_code=503, detail="Query engine not available")
@@ -441,53 +518,73 @@ async def query_financial_data(request: QueryRequest):
         if provider_manager is None:
             raise HTTPException(status_code=503, detail="Live provider manager not initialized")
 
+        # --- Intent-Based Source Detection ---
+        # If the user explicitly mentions a provider name in their query (e.g. "Cherche sur Finnhub"),
+        # auto-activate that provider for this request — bypassing the UI toggle.
+        intent_sources = _detect_intent_sources(standalone_query)
+        for provider in intent_sources:
+            if provider not in sources:
+                if provider_manager.PROVIDERS[provider]["configured_flag"]():
+                    sources = list(set(sources + [provider]))
+                    provider_manager._enabled[provider] = True
+                    logger.info("Auto-activated provider '%s' from query intent", provider)
+                else:
+                    logger.warning(
+                        "User requested provider '%s' but API key is not configured — skipping.",
+                        provider
+                    )
+        # ---
+
         live_sources = [source for source in sources if source != "scraping"]
+        # Only block if the provider was explicitly in the request sources (not intent-detected)
         for source in live_sources:
-            if not provider_manager.is_provider_enabled(source):
+            if source not in intent_sources and not provider_manager.is_provider_enabled(source):
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Provider '{source}' is not enabled. Enable it before using it for queries."
+                    detail=f"Provider '{source}' is not enabled. Enable it in the UI or mention it in your query."
                 )
 
-        logger.info(
-            "Processing query: %s | sources=%s",
-            request.query[:100] + "..." if len(request.query) > 100 else request.query,
-            ",".join(sources)
-        )
-
         scraping_answer = None
-        scraping_sources = []
+        scraping_sources_used = []
         if "scraping" in sources:
-            scraping_response = query_engine.query(request.query)
-            scraping_answer = str(scraping_response)
-            if hasattr(scraping_response, 'source_nodes'):
-                scraping_sources = [
-                    node.metadata.get('url', '')
-                    for node in scraping_response.source_nodes
-                    if node.metadata.get('url')
-                ]
+            try:
+                response = query_engine.query(standalone_query)
+                scraping_answer = str(response)
+                for node in response.source_nodes:
+                    if node.metadata.get('url'):
+                        scraping_sources_used.append(node.metadata.get('url'))
+            except Exception as e:
+                logger.warning("Failed to query Qdrant (scraping): %s", e)
 
         live_answer = None
         live_sources_used = []
         if live_sources:
+            keyword_query = _extract_keywords(standalone_query)
             live_documents = await provider_manager.fetch_documents_for_sources(
-                request.query,
+                keyword_query,
                 live_sources,
                 settings.max_articles_per_batch,
             )
             if live_documents:
                 live_engine = build_query_engine_from_documents(live_documents)
-                live_response = live_engine.query(request.query)
+                live_response = live_engine.query(standalone_query)
                 live_answer = str(live_response)
-                live_sources_used = [f"live:{source}" for source in live_sources]
+                for doc in live_documents:
+                    url = doc.extra_info.get("url")
+                    provider = doc.extra_info.get("provider")
+                    if url:
+                        live_sources_used.append(url)
+                    elif provider:
+                        live_sources_used.append(f"live:{provider}")
 
+        # Combine answers if both are used
         if scraping_answer and live_answer:
-            answer = _merge_scraping_and_live_answers(request.query, scraping_answer, live_answer)
+            answer = _merge_scraping_and_live_answers(standalone_query, scraping_answer, live_answer)
         else:
             answer = scraping_answer or live_answer or "No answer available from the selected sources."
 
         processing_time = time.time() - start_time
-        sources_used = scraping_sources + live_sources_used
+        sources_used = scraping_sources_used + live_sources_used
 
         result = QueryResponse(
             answer=answer,

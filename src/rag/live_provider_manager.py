@@ -96,10 +96,10 @@ class LiveProviderManager:
             provider = MarketauxProvider()
             payload = await provider.get_financial_news(
                 search=query,
-                language=settings.marketaux_default_language,
+                language="en",
                 limit=min(limit, settings.marketaux_default_limit),
                 page=1,
-                group_similar=settings.marketaux_group_similar,
+                group_similar=False,  # Keep all articles for live queries to maximise context
             )
             return payload.get("data", [])
 
@@ -110,12 +110,18 @@ class LiveProviderManager:
             if not isinstance(articles, list):
                 return []
             if query:
-                query_lower = query.lower()
-                articles = [
-                    article for article in articles
-                    if query_lower in str(article.get("headline", "")).lower()
-                    or query_lower in str(article.get("summary", "")).lower()
-                ]
+                # Word-by-word matching: at least one keyword word must appear
+                # Avoids false negatives when searching for multi-word phrases
+                query_words = [w for w in query.lower().split() if len(w) > 3]
+                if query_words:
+                    articles = [
+                        article for article in articles
+                        if any(
+                            word in str(article.get("headline", "")).lower()
+                            or word in str(article.get("summary", "")).lower()
+                            for word in query_words
+                        )
+                    ]
             return articles[:limit]
 
         raise ValueError(f"Unsupported provider: {provider_name}")
