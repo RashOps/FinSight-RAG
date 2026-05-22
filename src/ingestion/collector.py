@@ -17,6 +17,8 @@ from trafilatura import extract
 
 from src.config import settings
 from src.ingestion.source import RSS_FEEDS
+from src.ingestion.finnhub_calling import FinnhubNewsProvider
+from src.ingestion.news_calling import NewsApiProvider, MarketauxProvider
 from src.utils.date_parser import standardize_date
 from src.utils.db_client import get_db
 from src.utils.http_client import StealthHttpClient
@@ -264,9 +266,124 @@ def save_to_dlq(article_url: str, title: str, source: str, error_reason: str) ->
     except Exception as e:
         logger.error("Failed to save article to DLQ: %s", e)
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _parse_article_date(raw_date):
+    """Parse a publication timestamp into a datetime object."""
+    if raw_date is None:
+        return None
+
+    try:
+        if isinstance(raw_date, (int, float)):
+            return datetime.fromtimestamp(int(raw_date), timezone.utc)
+
+        if isinstance(raw_date, str):
+            parsed = standardize_date(raw_date)
+            if parsed:
+                return parsed
+    except Exception:
+        pass
+
+    return None
+
+
+def _build_api_article_payload(
+    url: str,
+    title: str,
+    source: str,
+    content: str,
+    summary: str,
+    published_at,
+    language: str = "en"
+) -> Optional[Dict[str, Any]]:
+    if not url or not isinstance(url, str):
+        return None
+
+    if not title or not isinstance(title, str):
+        return None
+
+    cleaned_content = (content or "").strip()
+    cleaned_summary = (summary or "").strip()
+
+    if not cleaned_content and cleaned_summary:
+        cleaned_content = cleaned_summary
+
+    published_date = _parse_article_date(published_at)
+    if published_date is None:
+        published_date = datetime.now(timezone.utc)
+
+    article_id = generate_content_hash(url)
+    payload = {
+        "_id": article_id,
+        "source": source or "API Source",
+        "title": title.strip(),
+        "title_hash": generate_content_hash(title),
+        "summary": cleaned_summary,
+        "content": cleaned_content,
+        "url": url,
+        "published_at": published_date,
+        "language": language or "en",
+        "vectorized": False,
+        "vectorized_at": None,
+        "qdrant_chunk_ids": [],
+        "content_length": len(cleaned_content),
+        "summary_length": len(cleaned_summary),
+    }
+
+    if validate_article_data(payload):
+        return payload
+
+    logger.warning("API article payload did not pass validation: %s", title)
+    return None
+
+
+def create_api_payloads(articles: List[Dict[str, Any]], source_name: str) -> List[Dict[str, Any]]:
+    """Create validated payloads from provider API articles."""
+    payloads: List[Dict[str, Any]] = []
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        payload = None
+        if source_name == "NewsAPI":
+            payload = _build_api_article_payload(
+                url=article.get("url"),
+                title=article.get("title") or article.get("headline"),
+                source=article.get("source", {}).get("name") or source_name,
+                content=article.get("content") or article.get("description") or "",
+                summary=article.get("description") or article.get("content") or "",
+                published_at=article.get("publishedAt"),
+                language=article.get("language") or settings.newsapi_default_language,
+            )
+        elif source_name == "Finnhub":
+            payload = _build_api_article_payload(
+                url=article.get("url"),
+                title=article.get("headline") or article.get("summary") or article.get("source") or "",
+                source=article.get("source") or source_name,
+                content=article.get("summary") or article.get("headline") or "",
+                summary=article.get("summary") or article.get("headline") or "",
+                published_at=article.get("datetime"),
+                language="en",
+            )
+        elif source_name == "Marketaux":
+            payload = _build_api_article_payload(
+                url=article.get("url"),
+                title=article.get("title") or article.get("headline") or "",
+                source=source_name,
+                content=article.get("content") or article.get("description") or "",
+                summary=article.get("description") or article.get("content") or "",
+                published_at=article.get("published_at"),
+                language=article.get("language") or "en",
+            )
+
+        if payload:
+            payloads.append(payload)
+
+    logger.info("Created %d API payloads for %s", len(payloads), source_name)
+    return payloads
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Payload Creation
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
 async def create_payload(
@@ -698,21 +815,148 @@ async def collect_articles_from_feed(
         }
 
 
-async def run_ingestion_pipeline() -> Dict[str, Any]:
-    """Run the full ingestion pipeline across all configured RSS feeds.
+async def collect_articles_from_newsapi(max_articles: int = 5) -> Dict[str, Any]:
+    """Collect articles from NewsAPI and save them to MongoDB."""
+    provider = NewsApiProvider()
+    query = "finance OR market OR economy OR stocks"
+    try:
+        logger.info("Fetching financial news from NewsAPI")
+        response = await provider.search_everything(
+            q=query,
+            search_in="title,description",
+            language=settings.newsapi_default_language,
+            sort_by="publishedAt",
+            page_size=min(max_articles, settings.newsapi_default_page_size),
+            page=1,
+        )
+
+        raw_articles = response.get("articles", []) if isinstance(response, dict) else []
+        payloads = create_api_payloads(raw_articles, source_name="NewsAPI")
+        if payloads:
+            save_stats = save_news_to_db(payloads)
+            return {
+                "success": True,
+                "provider": "NewsAPI",
+                "articles_collected": len(payloads),
+                "database_stats": save_stats,
+            }
+
+        return {
+            "success": False,
+            "provider": "NewsAPI",
+            "articles_collected": 0,
+            "error": "No valid API payloads generated",
+        }
+    except Exception as e:
+        logger.error("NewsAPI collection failed: %s", e)
+        return {
+            "success": False,
+            "provider": "NewsAPI",
+            "articles_collected": 0,
+            "error": str(e),
+        }
+
+
+async def collect_articles_from_finnhub(max_articles: int = 5) -> Dict[str, Any]:
+    """Collect market news from Finnhub and save them to MongoDB."""
+    provider = FinnhubNewsProvider()
+    try:
+        logger.info("Fetching market news from Finnhub")
+        response = await provider.get_market_news(
+            category=settings.finnhub_default_category,
+        )
+
+        raw_articles = []
+        if isinstance(response, list):
+            raw_articles = response
+        elif isinstance(response, dict):
+            raw_articles = response.get("data", []) or response.get("news", [])
+
+        payloads = create_api_payloads(raw_articles[:max_articles], source_name="Finnhub")
+        if payloads:
+            save_stats = save_news_to_db(payloads)
+            return {
+                "success": True,
+                "provider": "Finnhub",
+                "articles_collected": len(payloads),
+                "database_stats": save_stats,
+            }
+
+        return {
+            "success": False,
+            "provider": "Finnhub",
+            "articles_collected": 0,
+            "error": "No valid API payloads generated",
+        }
+    except Exception as e:
+        logger.error("Finnhub collection failed: %s", e)
+        return {
+            "success": False,
+            "provider": "Finnhub",
+            "articles_collected": 0,
+            "error": str(e),
+        }
+
+
+async def collect_articles_from_marketaux(max_articles: int = 5) -> Dict[str, Any]:
+    """Collect financial news from Marketaux and save them to MongoDB."""
+    provider = MarketauxProvider()
+    try:
+        logger.info("Fetching financial news from Marketaux")
+        response = await provider.get_financial_news(
+            limit=min(max_articles, settings.marketaux_default_limit),
+            page=1,
+            group_similar=settings.marketaux_group_similar,
+        )
+
+        raw_articles = response.get("data", []) if isinstance(response, dict) else []
+        payloads = create_api_payloads(raw_articles, source_name="Marketaux")
+        if payloads:
+            save_stats = save_news_to_db(payloads)
+            return {
+                "success": True,
+                "provider": "Marketaux",
+                "articles_collected": len(payloads),
+                "database_stats": save_stats,
+            }
+
+        return {
+            "success": False,
+            "provider": "Marketaux",
+            "articles_collected": 0,
+            "error": "No valid API payloads generated",
+        }
+    except Exception as e:
+        logger.error("Marketaux collection failed: %s", e)
+        return {
+            "success": False,
+            "provider": "Marketaux",
+            "articles_collected": 0,
+            "error": str(e),
+        }
+
+
+async def run_ingestion_pipeline(max_articles: int = None) -> Dict[str, Any]:
+    """Run the full ingestion pipeline across RSS and configured API providers.
 
     Returns:
         Aggregated statistics for the entire pipeline run.
     """
     logger.info("═" * 60)
-    logger.info("Starting FinSight ingestion pipeline — %d feeds", len(RSS_FEEDS))
+    logger.info("Starting FinSight ingestion pipeline — %d feeds + API providers", len(RSS_FEEDS))
     logger.info("═" * 60)
+
+    if max_articles is None:
+        max_articles = settings.max_articles_per_batch
 
     pipeline_stats: Dict[str, Any] = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "feeds_total": len(RSS_FEEDS),
         "feeds_success": 0,
         "feeds_failed": 0,
+        "api_providers_total": 3,
+        "api_providers_success": 0,
+        "api_providers_failed": 0,
         "articles_total": 0,
         "results": [],
     }
@@ -722,7 +966,7 @@ async def run_ingestion_pipeline() -> Dict[str, Any]:
             logger.info("━━ Processing feed: %s", feed_name)
             try:
                 result = await collect_articles_from_feed(
-                    client, feed_url, max_articles=settings.max_articles_per_batch
+                    client, feed_url, max_articles=max_articles
                 )
                 pipeline_stats["results"].append({
                     "feed_name": feed_name,
@@ -743,6 +987,33 @@ async def run_ingestion_pipeline() -> Dict[str, Any]:
                     "success": False,
                     "error": str(e),
                 })
+
+    for provider_func in [
+        collect_articles_from_newsapi,
+        collect_articles_from_finnhub,
+        collect_articles_from_marketaux,
+    ]:
+        provider_name = provider_func.__name__.replace("collect_articles_from_", "")
+        try:
+            result = await provider_func(max_articles=max_articles)
+            pipeline_stats["results"].append({
+                "provider": provider_name,
+                **result,
+            })
+
+            if result.get("success"):
+                pipeline_stats["api_providers_success"] += 1
+                pipeline_stats["articles_total"] += result.get("articles_collected", 0)
+            else:
+                pipeline_stats["api_providers_failed"] += 1
+        except Exception as e:
+            pipeline_stats["api_providers_failed"] += 1
+            logger.error("Pipeline error for provider %s: %s", provider_name, e)
+            pipeline_stats["results"].append({
+                "provider": provider_name,
+                "success": False,
+                "error": str(e),
+            })
 
     pipeline_stats["finished_at"] = datetime.now(timezone.utc).isoformat()
 
