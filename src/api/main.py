@@ -509,7 +509,7 @@ async def general_exception_handler(request, exc):
 
 # Utility functions for background tasks
 async def fetch_articles(num_articles: int = 3):
-    """Run the full ingestion pipeline from RSS and provider APIs."""
+    """Run the full ingestion pipeline from RSS feeds only."""
     try:
         logger.info("Starting ingestion pipeline from API endpoint")
         result = await run_ingestion_pipeline(max_articles=num_articles)
@@ -546,7 +546,7 @@ async def run_dlq_processing():
 @app.post("/fetch-articles", tags=["Ingestion"])
 async def run_fetch_articles(background_tasks: BackgroundTasks, limit: int = 3):
     """
-    Launch background article ingestion from RSS feeds and provider APIs.
+    Launch background article ingestion from RSS feeds only.
 
     - **limit**: Maximum articles to fetch per source
     """
