@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator, ValidationError
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import os
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -73,24 +73,24 @@ class Settings(BaseSettings):
     )
 
     # API calling - NewsAPI
-    the_news_api: str = Field(
+    the_news_api: Optional[str] = Field(
+        default=None,
         description="TheNewsAPI.org API key for news searching",
-        alias="THE_NEWS_API",
-        min_length=20
+        alias="THE_NEWS_API"
     )
 
     # API calling - Finnhub
-    finnhub_api: str = Field(
+    finnhub_api: Optional[str] = Field(
+        default=None,
         description="Finnhub API key for market news",
-        alias="FINNHUB_API",
-        min_length=20
+        alias="FINNHUB_API"
     )
 
     # API calling - Marketaux
-    marketaux_api: str = Field(
+    marketaux_api: Optional[str] = Field(
+        default=None,
         description="Marketaux API token for financial news",
-        alias="MARKETAUX_API",
-        min_length=20
+        alias="MARKETAUX_API"
     )
     
     # NewsAPI configuration

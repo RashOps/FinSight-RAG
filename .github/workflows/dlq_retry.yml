@@ -2,8 +2,8 @@ name: DLQ Retry Pipeline
 
 on:
   schedule:
-    # Lance toutes les 12 heures
-    - cron: '0 */12 * * *'
+    # Lance deux fois par semaine, le lundi et le jeudi à 00h UTC
+    - cron: '0 0 * * 1,4'
   workflow_dispatch:
 
 jobs:
@@ -18,6 +18,9 @@ jobs:
       groq_api_key: ${{ secrets.GROQ_API_KEY }}
       cohere_api_key: ${{ secrets.COHERE_API_KEY }}
       scrape_do_api_key: ${{ secrets.SCRAPE_DO_API_KEY }}
+      THE_NEWS_API: ${{ secrets.THE_NEWS_API }}
+      FINNHUB_API: ${{ secrets.FINNHUB_API }}
+      MARKETAUX_API: ${{ secrets.MARKETAUX_API }}
       mongo_db_name: "finsight-db"
 
     steps:
